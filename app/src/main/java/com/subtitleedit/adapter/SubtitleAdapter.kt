@@ -248,6 +248,7 @@ class SubtitleAdapter(
     }
 
     inner class SubtitleViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        private val contentContainer: View = (itemView as ViewGroup).getChildAt(0)
         private val tvIndex: TextView = itemView.findViewById(R.id.tvIndex)
         private val tvStartTime: TextView = itemView.findViewById(R.id.tvStartTime)
         private val tvEndTime: TextView = itemView.findViewById(R.id.tvEndTime)
@@ -261,7 +262,7 @@ class SubtitleAdapter(
          */
         fun bindSelection(isSelected: Boolean) {
             ivSelected.visibility = if (isSelected) View.VISIBLE else View.GONE
-            itemView.alpha = if (isSelected) 0.6f else 1.0f
+            contentContainer.alpha = if (isSelected) 0.6f else 1.0f
         }
 
         /**
@@ -353,7 +354,7 @@ class SubtitleAdapter(
 
             // 设置选中状态
             ivSelected.visibility = if (isSelected) View.VISIBLE else View.GONE
-            itemView.alpha = if (isSelected) 0.6f else 1.0f
+            contentContainer.alpha = if (isSelected) 0.6f else 1.0f
 
             // 点击事件 - 切换选中状态
             // 使用 adapterPosition 获取实时的位置，避免 ViewHolder 复用时 position 过期
