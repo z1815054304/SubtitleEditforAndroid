@@ -560,8 +560,7 @@ class EditorActivity : AppCompatActivity() {
         
         if (newText != null) {
             entry.text = newText
-            subtitleAdapter.notifyItemChanged(position)
-            hasUnsavedChanges = true
+            notifyEntriesChanged(listOf(position), includeNeighbors = false)
             
             // 重新搜索以更新结果
             searchInRecyclerView(
@@ -634,11 +633,7 @@ class EditorActivity : AppCompatActivity() {
                     updates.forEach { update ->
                         subtitleEntries[update.index].text = update.newText
                     }
-                    updates.forEach { update ->
-                        val position = update.index
-                        subtitleAdapter.notifyItemChanged(position)
-                    }
-                    hasUnsavedChanges = true
+                    notifyEntriesChanged(updates.map { it.index }, includeNeighbors = false)
                     clearSearchStateAfterReplace()
                     showShortToast("已替换 ${updates.size} 处")
             }
@@ -1002,7 +997,7 @@ class EditorActivity : AppCompatActivity() {
         savedScrollPosition = binding.svSourceView.scrollY
         
         // 刷新字幕列表
-        subtitleAdapter.submitList(subtitleEntries.toList())
+        submitSubtitleList(refreshAll = true, updateFormat = false, syncWaveform = false)
         
         // 淡出源视图，淡入字幕列表
         binding.svSourceView.animate()
@@ -1290,17 +1285,7 @@ class EditorActivity : AppCompatActivity() {
                 subtitleEntries.removeAt(position)
             }
         }
-        renumberEntries()
         syncAfterDelete(deletedIndices)
-        markAsChanged()
-    }
-    
-    /**
-     * 刷新所有条目（确保序号实时更新）
-     */
-    private fun refreshAllItems() {
-        renumberEntries()
-        subtitleAdapter.submitList(subtitleEntries.toList())
     }
     
     /**
@@ -1321,8 +1306,7 @@ class EditorActivity : AppCompatActivity() {
 
             if (subtitleEntries.isEmpty()) {
                 setSubtitleEntries(SubtitleEntryOps.deepCopy(clipboardEntries))
-                syncWaveformSubtitles()
-                markAsChanged()
+                submitSubtitleList(refreshAll = true, markChanged = true)
                 Toast.makeText(this, "已粘贴 ${clipboardEntries.size} 项", Toast.LENGTH_SHORT).show()
                 return
             }
@@ -1334,19 +1318,12 @@ class EditorActivity : AppCompatActivity() {
                 clipboardEntries = clipboardEntries
             )
             if (pasteResult.structureChanged) {
-                renumberEntries()
-                subtitleAdapter.submitList(subtitleEntries.toList()) {
-                    // 序号与首行替换都依赖完整重绑，避免 DiffUtil 对可变对象感知不全
-                    subtitleAdapter.refreshAllItems()
-                }
+                submitSubtitleList(refreshAll = true, markChanged = true)
                 Toast.makeText(this, "已粘贴 ${clipboardEntries.size} 项", Toast.LENGTH_SHORT).show()
             } else {
-                notifyPositionsWithNeighbors(pasteResult.affectedPositions.toList())
+                notifyEntriesChanged(pasteResult.affectedPositions)
                 Toast.makeText(this, "已粘贴", Toast.LENGTH_SHORT).show()
             }
-            // 同步字幕到波形视图
-            syncWaveformSubtitles()
-            markAsChanged()
         }
     }
     
@@ -1359,9 +1336,7 @@ class EditorActivity : AppCompatActivity() {
         if (position >= 0 && position < subtitleEntries.size) {
             showDeleteConfirm("确定要删除此字幕吗？") {
                     subtitleEntries.removeAt(position)
-                    renumberEntries()
                     syncAfterDelete(setOf(position))
-                    markAsChanged()
                     Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show()
             }
         }
@@ -1394,20 +1369,15 @@ class EditorActivity : AppCompatActivity() {
         newEntry.text = "新字幕"
 
         subtitleEntries.add(insertPosition, newEntry)
-        renumberEntries()
-        subtitleAdapter.submitList(subtitleEntries.toList())
-        // 同步选中状态
-        subtitleAdapter.syncSelectionWithCurrentList()
-        // 不清空选择，也不自动选中新插入的行
-        updateSelectedCountDisplay()
-        updateFormatInfo()
-
-        // 同步字幕到波形视图，保持选中状态
-        if (isAudioFile) {
-            binding.waveformTimelineView.setSubtitlesKeepSelection(subtitleEntries.toList(), insertPosition)
+        submitSubtitleList(
+            refreshAll = true,
+            syncWaveform = false,
+            markChanged = true
+        ) {
+            subtitleAdapter.syncSelectionWithCurrentList()
+            updateSelectedCountDisplay()
         }
-
-        markAsChanged()
+        setWaveformSubtitlesKeepSelection(insertPosition)
         Toast.makeText(this, "已插入新字幕", Toast.LENGTH_SHORT).show()
     }
 
@@ -1425,15 +1395,12 @@ class EditorActivity : AppCompatActivity() {
             .let { if (it == -1) subtitleEntries.size else it }
 
         subtitleEntries.add(insertPos, newEntry)
-        renumberEntries()
-        subtitleAdapter.submitList(subtitleEntries.toList())
-
-        // 同步字幕到波形视图，保持选中状态
-        if (isAudioFile) {
-            binding.waveformTimelineView.setSubtitlesKeepSelection(subtitleEntries.toList(), insertPos)
-        }
-
-        markAsChanged()
+        submitSubtitleList(
+            refreshAll = true,
+            syncWaveform = false,
+            markChanged = true
+        )
+        setWaveformSubtitlesKeepSelection(insertPos)
         Toast.makeText(this, "已插入新字幕", Toast.LENGTH_SHORT).show()
     }
 
@@ -1461,11 +1428,7 @@ class EditorActivity : AppCompatActivity() {
         // 应用时间偏移
         SubtitleEntryOps.applyOffsetAll(selectedEntryObjects, offsetMs)
         
-        // 刷新列表并同步选中状态
-        subtitleAdapter.submitList(subtitleEntries.toList())
-        subtitleAdapter.syncSelectionWithCurrentList()
-        
-        markAsChanged()
+        notifyEntriesChanged(selectedEntries.map { it.second })
         showShortToast("已对选中项应用 ${offsetMs}ms 偏移")
     }
     
@@ -1570,14 +1533,11 @@ class EditorActivity : AppCompatActivity() {
             clipboardEntries = clipboardEntries
         )
 
-        renumberEntries()
-        subtitleAdapter.submitList(subtitleEntries.toList()) {
-            subtitleAdapter.setSelectionByIndices(replaceResult.insertedPositions)
-            updateSelectedCountDisplay()
-        }
-
-        syncWaveformSubtitles()
-        markAsChanged()
+        submitSubtitleList(
+            refreshAll = true,
+            selectedIndices = replaceResult.insertedPositions,
+            markChanged = true
+        )
         Toast.makeText(this, "已粘贴 ${clipboardEntries.size} 项", Toast.LENGTH_SHORT).show()
     }
     
@@ -1586,9 +1546,28 @@ class EditorActivity : AppCompatActivity() {
     }
 
     private fun onEntryUpdated(position: Int, message: String = "已更新") {
-        subtitleAdapter.notifyItemChanged(position)
-        markAsChanged()
+        notifyEntriesChanged(listOf(position))
         showShortToast(message)
+    }
+
+    private fun notifyEntriesChanged(
+        positions: Iterable<Int>,
+        includeNeighbors: Boolean = true,
+        syncWaveform: Boolean = true,
+        markChanged: Boolean = true
+    ) {
+        val positionList = positions.toList()
+        if (includeNeighbors) {
+            notifyPositionsWithNeighbors(positionList)
+        } else {
+            positionList
+                .filter { it in subtitleEntries.indices }
+                .distinct()
+                .sorted()
+                .forEach { subtitleAdapter.notifyItemChanged(it) }
+        }
+        if (syncWaveform) syncWaveformSubtitles()
+        if (markChanged) markAsChanged()
     }
 
     private fun notifyPositionsWithNeighbors(positions: List<Int>) {
@@ -1614,6 +1593,37 @@ class EditorActivity : AppCompatActivity() {
         if (!isAudioFile) return
         binding.waveformTimelineView.setSubtitles(subtitleEntries.toList())
     }
+
+    private fun setWaveformSubtitlesKeepSelection(selectedIndex: Int) {
+        if (!isAudioFile) return
+        binding.waveformTimelineView.setSubtitlesKeepSelection(subtitleEntries.toList(), selectedIndex)
+    }
+
+    private fun submitSubtitleList(
+        refreshAll: Boolean = false,
+        selectedIndices: Set<Int>? = null,
+        clearSelection: Boolean = false,
+        updateFormat: Boolean = true,
+        syncWaveform: Boolean = true,
+        markChanged: Boolean = false,
+        afterSubmit: (() -> Unit)? = null
+    ) {
+        renumberEntries(force = refreshAll)
+        subtitleAdapter.submitList(subtitleEntries.toList()) {
+            if (clearSelection) {
+                subtitleAdapter.clearSelection()
+            }
+            selectedIndices?.let { subtitleAdapter.setSelectionByIndices(it) }
+            if (refreshAll) {
+                subtitleAdapter.refreshAllItems()
+            }
+            updateSelectedCountDisplay()
+            afterSubmit?.invoke()
+        }
+        if (updateFormat) updateFormatInfo()
+        if (syncWaveform) syncWaveformSubtitles()
+        if (markChanged) markAsChanged()
+    }
     
     private fun newFile() {
         runAfterUnsavedChangesConfirmed(
@@ -1633,9 +1643,7 @@ class EditorActivity : AppCompatActivity() {
         isSourceViewMode = false
         binding.rvSubtitles.visibility = android.view.View.VISIBLE
         binding.svSourceView.visibility = android.view.View.GONE
-        subtitleAdapter.submitList(emptyList())
-        subtitleAdapter.clearSelection()
-        updateSelectedCountDisplay()
+        submitSubtitleList(refreshAll = true, clearSelection = true, syncWaveform = false)
         supportActionBar?.title = "未命名"
         currentFormatInfo = "格式：SRT | 条目数：0"
         supportActionBar?.subtitle = currentFormatInfo
@@ -1867,29 +1875,22 @@ class EditorActivity : AppCompatActivity() {
                 val entry = subtitleEntries[longClickPos]
                 SubtitleEntryOps.applyOffset(entry, offsetMs)
                 
-                // 刷新列表并同步选中状态（保持其他选中状态）
-                subtitleAdapter.submitList(subtitleEntries.toList())
-                subtitleAdapter.syncSelectionWithCurrentList()
+                notifyEntriesChanged(listOf(longClickPos))
             }
             // 没有长按位置但有选中的字幕，对选中的字幕应用偏移
             subtitleAdapter.getSelectedCount() > 0 -> {
                 val selectedEntries = subtitleAdapter.getSelectedEntries()
                 SubtitleEntryOps.applyOffsetAll(selectedEntries.map { it.first }, offsetMs)
                 
-                // 刷新列表并同步选中状态
-                subtitleAdapter.submitList(subtitleEntries.toList())
-                subtitleAdapter.syncSelectionWithCurrentList()
+                notifyEntriesChanged(selectedEntries.map { it.second })
             }
             // 都没有，对所有字幕应用偏移
             else -> {
                 SubtitleEntryOps.applyOffsetAll(subtitleEntries, offsetMs)
                 
-                // 刷新列表
-                subtitleAdapter.submitList(subtitleEntries.toList())
+                submitSubtitleList(refreshAll = true, markChanged = true)
             }
         }
-        
-        markAsChanged()
         showShortToast("已应用 ${offsetMs}ms 偏移")
     }
     
@@ -1904,9 +1905,7 @@ class EditorActivity : AppCompatActivity() {
                 selectedEntries.sortedByDescending { it.second }.forEach { (_, position) ->
                     subtitleEntries.removeAt(position)
                 }
-                renumberEntries()
                 syncAfterDelete(deletedIndices)
-                markAsChanged()
                 Toast.makeText(this, "已删除 ${selectedEntries.size} 条字幕", Toast.LENGTH_SHORT).show()
         }
     }
@@ -1929,11 +1928,12 @@ class EditorActivity : AppCompatActivity() {
             }
         }
 
-        subtitleAdapter.submitList(subtitleEntries.toList()) {
-            // submitList 完成后，恢复选中状态
-            subtitleAdapter.setSelectionByIndices(remainingSelectedIndices)
-            updateSelectedCountDisplay()
-
+        submitSubtitleList(
+            refreshAll = true,
+            selectedIndices = remainingSelectedIndices,
+            syncWaveform = false,
+            markChanged = true
+        ) {
             // 刷新被删除行的前一行（消除时间冲突标红）
             deletedIndices.forEach { deletedIdx ->
                 val offset = deletedIndices.count { it < deletedIdx }
@@ -1943,8 +1943,6 @@ class EditorActivity : AppCompatActivity() {
                 }
             }
         }
-        updateFormatInfo()
-
         // 同步字幕到波形视图，保持选中状态
         if (isAudioFile) {
             binding.waveformTimelineView.setSubtitlesAfterDelete(subtitleEntries.toList(), deletedIndices)
@@ -2088,11 +2086,7 @@ class EditorActivity : AppCompatActivity() {
                 selectedEntries.forEachIndexed { index, (entry, _) ->
                     entry.text = translatedTexts[index]
                 }
-                // 刷新显示
-                selectedEntries.forEach { (_, position) ->
-                    subtitleAdapter.notifyItemChanged(position)
-                }
-                markAsChanged()
+                notifyEntriesChanged(selectedEntries.map { it.second }, includeNeighbors = false)
                 showShortToast("翻译已应用")
             }
             .setNegativeButton("取消", null)
@@ -2111,9 +2105,9 @@ class EditorActivity : AppCompatActivity() {
         Toast.makeText(this, "翻译失败：$message", Toast.LENGTH_LONG).show()
     }
     
-    private fun renumberEntries() {
+    private fun renumberEntries(force: Boolean = false) {
         val currentCount = subtitleEntries.size
-        if (currentCount == lastIndexedEntryCount) return
+        if (!force && currentCount == lastIndexedEntryCount) return
         subtitleEntries.forEachIndexed { index, entry ->
             entry.index = index + 1
         }
@@ -2122,12 +2116,12 @@ class EditorActivity : AppCompatActivity() {
 
     private fun setSubtitleEntries(entries: List<SubtitleEntry>) {
         subtitleEntries = entries.toMutableList()
-        renumberEntries()
+        renumberEntries(force = true)
     }
 
     private fun clearSubtitleEntries() {
         subtitleEntries.clear()
-        renumberEntries()
+        renumberEntries(force = true)
     }
     
     private fun updateFormatInfo() {
@@ -2140,10 +2134,6 @@ class EditorActivity : AppCompatActivity() {
         }
         currentFormatInfo = "格式：$formatName | $countInfo"
         supportActionBar?.subtitle = currentFormatInfo
-        // 条目数变化时，强制刷新所有可见项的序号显示
-        if (!isSourceViewMode) {
-            subtitleAdapter.refreshAllItems()
-        }
     }
 
     private fun getFormatDisplayName(format: SubtitleParser.SubtitleFormat): String {
@@ -2446,9 +2436,7 @@ class EditorActivity : AppCompatActivity() {
         binding.waveformTimelineView.onSubtitleChangeListener = { updatedSubtitles ->
             // 更新字幕列表
             setSubtitleEntries(updatedSubtitles)
-            // 使用 notifyDataSetChanged 强制立即刷新，而不是异步的 submitList
-            subtitleAdapter.notifyDataSetChanged()
-            markAsChanged()
+            submitSubtitleList(refreshAll = true, syncWaveform = false, markChanged = true)
         }
         
         // 设置选中状态变化监听器（波形时间轴选中状态变化时的处理）
@@ -2699,14 +2687,12 @@ class EditorActivity : AppCompatActivity() {
                 loadSubtitleFile(subtitleFile)
             } else {
                 clearSubtitleEntries()
-                subtitleAdapter.submitList(emptyList())
-                updateFormatInfo()
+                submitSubtitleList(refreshAll = true, syncWaveform = false)
                 Toast.makeText(this, "未找到同名字幕文件", Toast.LENGTH_SHORT).show()
             }
         } else {
             clearSubtitleEntries()
-            subtitleAdapter.submitList(emptyList())
-            updateFormatInfo()
+            submitSubtitleList(refreshAll = true, syncWaveform = false)
         }
         
         binding.waveformTimelineView.initialize(audioDuration, subtitleEntries.toList())
@@ -3025,9 +3011,7 @@ class EditorActivity : AppCompatActivity() {
         val newStartTime = audioCurrentPosition
         entry.startTime = newStartTime
         
-        // 刷新该条目显示
-        subtitleAdapter.notifyItemChanged(position)
-        markAsChanged()
+        notifyEntriesChanged(listOf(position))
         
         if (newStartTime >= entry.endTime) {
             Toast.makeText(this, "开始时间已设置，但大于结束时间，请调整结束时间", Toast.LENGTH_LONG).show()
