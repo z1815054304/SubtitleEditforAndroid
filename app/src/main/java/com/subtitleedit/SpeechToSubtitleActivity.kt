@@ -14,7 +14,6 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.subtitleedit.databinding.ActivitySpeechToSubtitleBinding
@@ -22,6 +21,7 @@ import com.subtitleedit.model.SubtitleEntry
 import com.subtitleedit.util.DirectoryDisplayPath
 import com.subtitleedit.util.SettingsManager
 import com.subtitleedit.util.SubtitleParser
+import com.subtitleedit.util.SubtitleOutputWriter
 import com.subtitleedit.util.WhisperRecognizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -295,7 +295,33 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
             com.subtitleedit.util.OverwritingToast.makeText(this, "请先选择文件和模型", Toast.LENGTH_SHORT).show()
             return
         }
+        val outputDir = outputDirUri ?: run {
+            com.subtitleedit.util.OverwritingToast.makeText(this, "输出目录未设置", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val format = formatOptions[binding.spinnerOutputFormat.selectedItemPosition]
+        val baseFileName = selectedFileName.substringBeforeLast(".")
+        val extension = format.lowercase()
 
+        if (SubtitleOutputWriter.exists(this, outputDir, baseFileName, extension)) {
+            AlertDialog.Builder(this)
+                .setTitle("文件名冲突")
+                .setMessage("输出目录中已存在 $baseFileName.$extension。请选择处理方式。")
+                .setPositiveButton("覆盖") { _, _ ->
+                    startConversion(overwriteOutput = true)
+                }
+                .setNeutralButton("自动重命名") { _, _ ->
+                    startConversion(overwriteOutput = false)
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+
+        startConversion(overwriteOutput = false)
+    }
+
+    private fun startConversion(overwriteOutput: Boolean) {
         isCancelled = false
         realtimeResults.clear()
         conversionJob = lifecycleScope.launch {
@@ -389,7 +415,7 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
                     val subtitleContent = generateSubtitle(segments)
                     showProgress("完成", 100)
                     appendRuntimeLog("生成字幕：${formatOptions[binding.spinnerOutputFormat.selectedItemPosition]} 格式")
-                    saveSubtitleFile(subtitleContent)
+                    saveSubtitleFile(subtitleContent, overwriteOutput)
                 } else {
                     showError(result.exceptionOrNull()?.message ?: "识别失败")
                 }
@@ -500,7 +526,7 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
     /**
      * 保存字幕文件
      */
-    private fun saveSubtitleFile(content: String) {
+    private fun saveSubtitleFile(content: String, overwrite: Boolean) {
         val outputDir = outputDirUri ?: run {
             com.subtitleedit.util.OverwritingToast.makeText(this, "输出目录未设置", Toast.LENGTH_SHORT).show()
             return
@@ -511,80 +537,16 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
             val baseFileName = selectedFileName.substringBeforeLast(".")
             val extension = format.lowercase()
 
-            // 检查是否是 file:// URI（本地目录）
-            if (outputDir.scheme == "file") {
-                // 使用传统 File API
-                val dir = File(outputDir.path!!)
-                val fileName = getUniqueFileName(dir, baseFileName, extension)
-                val outputFile = File(dir, fileName)
-
-                outputFile.writeText(content, java.nio.charset.StandardCharsets.UTF_8)
-
-                val segmentCount = content.lines().filter { line ->
-                    line.matches(Regex("\\d+"))
-                }.size
-                com.subtitleedit.util.OverwritingToast.makeText(this, "字幕已保存到输出目录（共 $segmentCount 条）", Toast.LENGTH_LONG).show()
-                return
-            }
-
-            // 使用 DocumentFile API（content:// URI）
-            val dir = DocumentFile.fromTreeUri(this, outputDir) ?: throw Exception("无法访问输出目录")
-
-            val fileName = getUniqueFileNameForDocumentFile(dir, baseFileName, extension)
-            val mimeType = when (format) {
-                "SRT" -> "application/x-subrip"
-                "LRC" -> "text/plain"
-                "TXT" -> "text/plain"
-                else -> "text/plain"
-            }
-
-            val outputFile = dir.createFile(mimeType, fileName)
-            if (outputFile == null) {
-                throw Exception("创建文件失败")
-            }
-
-            contentResolver.openOutputStream(outputFile.uri)?.use { output ->
-                output.write(content.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
-            }
+            val fileName = SubtitleOutputWriter.writeText(this, outputDir, baseFileName, extension, content, overwrite)
 
             val segmentCount = content.lines().filter { line ->
                 line.matches(Regex("\\d+"))
             }.size
-            com.subtitleedit.util.OverwritingToast.makeText(this, "字幕已保存到输出目录（共 $segmentCount 条）", Toast.LENGTH_LONG).show()
+            com.subtitleedit.util.OverwritingToast.makeText(this, "字幕已保存：$fileName（共 $segmentCount 条）", Toast.LENGTH_LONG).show()
 
         } catch (e: Exception) {
             com.subtitleedit.util.OverwritingToast.makeText(this, "保存失败：${e.message}", Toast.LENGTH_LONG).show()
         }
-    }
-
-    /**
-     * 获取唯一的文件名（File API）
-     */
-    private fun getUniqueFileName(dir: File, baseName: String, extension: String): String {
-        var fileName = "$baseName.$extension"
-        var counter = 1
-
-        while (File(dir, fileName).exists()) {
-            fileName = "$baseName ($counter).$extension"
-            counter++
-        }
-
-        return fileName
-    }
-
-    /**
-     * 获取唯一的文件名（DocumentFile API）
-     */
-    private fun getUniqueFileNameForDocumentFile(dir: DocumentFile, baseName: String, extension: String): String {
-        var fileName = "$baseName.$extension"
-        var counter = 1
-
-        while (dir.findFile(fileName) != null) {
-            fileName = "$baseName ($counter).$extension"
-            counter++
-        }
-
-        return fileName
     }
 
     /**
