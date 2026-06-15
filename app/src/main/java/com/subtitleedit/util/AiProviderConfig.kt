@@ -9,7 +9,8 @@ object AiProviderConfig {
         val id: String,
         val displayName: String,
         val apiUrl: String,
-        val defaultModel: String
+        val defaultModel: String,
+        val models: List<String> = emptyList()
     )
 
     val providers = listOf(
@@ -23,7 +24,8 @@ object AiProviderConfig {
             id = DEEPSEEK,
             displayName = "DeepSeek",
             apiUrl = "https://api.deepseek.com/chat/completions",
-            defaultModel = "deepseek-v4-flash"
+            defaultModel = "deepseek-v4-flash",
+            models = listOf("deepseek-v4-flash", "deepseek-v4-pro")
         ),
         Provider(
             id = OPENAI,

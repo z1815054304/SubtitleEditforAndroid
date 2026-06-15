@@ -97,7 +97,10 @@ class EditorActivity : AppCompatActivity() {
     
     // 是否有未保存的更改
     private var hasUnsavedChanges = false
-    
+
+    // 是否为新建且从未保存过的文件
+    private var isNewFile = true
+
     // 当前格式信息（用于 toolbar subtitle 恢复）
     private var currentFormatInfo = ""
     
@@ -867,8 +870,9 @@ class EditorActivity : AppCompatActivity() {
         val content = readFileOrNull(file, "读取文件失败") ?: return
         parseContent(content)
         hasUnsavedChanges = false
+        isNewFile = false
     }
-    
+
     private fun openFileFromUri(uri: Uri) {
         try {
             val content = FileUtils.readUri(this, uri)
@@ -878,6 +882,7 @@ class EditorActivity : AppCompatActivity() {
             supportActionBar?.title = fileName
             parseContent(content)
             hasUnsavedChanges = false
+            isNewFile = false
             com.subtitleedit.util.OverwritingToast.makeText(this, "文件已打开：$fileName", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             com.subtitleedit.util.OverwritingToast.makeText(this, "打开文件失败：${e.message}", Toast.LENGTH_SHORT).show()
@@ -1636,7 +1641,15 @@ class EditorActivity : AppCompatActivity() {
     private fun doNewFile() {
         filePath = ""
         currentFile = null
+        isNewFile = true
         clearSubtitleEntries()
+        // 添加默认字幕行：3秒时长，文本"请输入文本"
+        subtitleEntries.add(SubtitleEntry(
+            index = 1,
+            startTime = 0L,
+            endTime = 3000L,
+            text = "请输入文本"
+        ))
         sourceViewContent = ""
         originalFileContent = ""
         currentCharset = StandardCharsets.UTF_8
@@ -1644,9 +1657,9 @@ class EditorActivity : AppCompatActivity() {
         isSourceViewMode = false
         binding.rvSubtitles.visibility = android.view.View.VISIBLE
         binding.svSourceView.visibility = android.view.View.GONE
-        submitSubtitleList(refreshAll = true, clearSelection = true, syncWaveform = false)
+        submitSubtitleList(refreshAll = true, clearSelection = true, syncWaveform = true)
         supportActionBar?.title = "未命名"
-        currentFormatInfo = "格式：SRT | 条目数：0"
+        currentFormatInfo = "格式：SRT | 条目数：${subtitleEntries.size}"
         supportActionBar?.subtitle = currentFormatInfo
         hasUnsavedChanges = false
         com.subtitleedit.util.OverwritingToast.makeText(this, "已新建文件", Toast.LENGTH_SHORT).show()
@@ -1673,7 +1686,7 @@ class EditorActivity : AppCompatActivity() {
             currentFile
         }
         
-        if (targetFile == null) {
+        if (isNewFile || targetFile == null) {
             saveFileAs()
             return
         }
@@ -1694,6 +1707,7 @@ class EditorActivity : AppCompatActivity() {
                 outputStream.write(content.toByteArray(currentCharset))
             }
         }
+        isNewFile = false
     }
     
     private fun showEncodingDialog() {
@@ -2886,6 +2900,7 @@ class EditorActivity : AppCompatActivity() {
             val content = FileUtils.readFile(subtitleFile, currentCharset)
             parseContent(content)
             hasUnsavedChanges = false
+            isNewFile = false
         } catch (e: Exception) {
             com.subtitleedit.util.OverwritingToast.makeText(this, "读取字幕文件失败：${e.message}", Toast.LENGTH_SHORT).show()
         }

@@ -99,6 +99,23 @@
                     </com.google.android.material.textfield.TextInputLayout>
 
                     <TextView
+                        android:id="@+id/tvModelLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="模型"
+                        android:textSize="14sp"
+                        android:textColor="@color/on_surface_variant"
+                        android:layout_marginBottom="4dp"
+                        android:visibility="gone" />
+
+                    <Spinner
+                        android:id="@+id/spinnerModel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="16dp"
+                        android:visibility="gone" />
+
+                    <TextView
                         android:id="@+id/tvProviderHint"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

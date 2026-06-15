@@ -67,16 +67,37 @@ class AiSettingsActivity : AppCompatActivity() {
         suppressTextSave = true
         binding.tvProviderTitle.text = "AI 翻译设置（${config.displayName}）"
         binding.tilApiKey.hint = "${config.displayName} API Key"
-        binding.tilModel.hint = "模型名称（默认 ${config.defaultModel}）"
         binding.tvProviderHint.text = "请求地址：${config.apiUrl}"
         binding.etApiKey.setText(settingsManager.getAiApiKey(provider))
-        binding.etModel.setText(settingsManager.getAiModel(provider))
+        val savedModel = settingsManager.getAiModel(provider)
+        if (config.models.isNotEmpty()) {
+            binding.tilModel.visibility = View.GONE
+            binding.tvModelLabel.visibility = View.VISIBLE
+            binding.spinnerModel.visibility = View.VISIBLE
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, config.models)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            binding.spinnerModel.adapter = adapter
+            val index = config.models.indexOf(savedModel).takeIf { it >= 0 } ?: 0
+            binding.spinnerModel.setSelection(index)
+        } else {
+            binding.tilModel.visibility = View.VISIBLE
+            binding.tvModelLabel.visibility = View.GONE
+            binding.spinnerModel.visibility = View.GONE
+            binding.tilModel.hint = "模型名称（默认 ${config.defaultModel}）"
+            binding.etModel.setText(savedModel)
+        }
         suppressTextSave = false
     }
 
     private fun saveCurrentProviderFields() {
         settingsManager.setAiApiKey(selectedProvider, binding.etApiKey.text?.toString()?.trim().orEmpty())
-        settingsManager.setAiModel(selectedProvider, binding.etModel.text?.toString()?.trim().orEmpty())
+        val config = AiProviderConfig.getProvider(selectedProvider)
+        if (config.models.isNotEmpty()) {
+            val model = binding.spinnerModel.selectedItem?.toString().orEmpty()
+            settingsManager.setAiModel(selectedProvider, model)
+        } else {
+            settingsManager.setAiModel(selectedProvider, binding.etModel.text?.toString()?.trim().orEmpty())
+        }
     }
 
     private fun setupSave() {
@@ -94,6 +115,15 @@ class AiSettingsActivity : AppCompatActivity() {
                 if (!suppressTextSave) settingsManager.setAiModel(selectedProvider, s.toString().trim())
             }
         })
+        binding.spinnerModel.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (!suppressTextSave) {
+                    val model = parent?.getItemAtPosition(position)?.toString().orEmpty()
+                    settingsManager.setAiModel(selectedProvider, model)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
         binding.etSourceLanguage.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
