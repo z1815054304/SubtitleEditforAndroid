@@ -256,20 +256,67 @@ class MainActivity : AppCompatActivity() {
     
     /**
      * 打开音频文件进行编辑
-     * 自动查找同文件夹下同名的字幕文件
+     * 自动查找同文件夹下同名的字幕文件，多个时让用户选择
      */
     private fun openAudioFileForEdit(audioFile: File) {
+        val possibleSubtitleFiles = FileUtils.getPossibleSubtitleFiles(audioFile)
+
+        when {
+            possibleSubtitleFiles.size > 1 -> {
+                showSubtitleFilePicker(audioFile, possibleSubtitleFiles)
+            }
+            else -> {
+                openAudioWithSubtitle(audioFile, possibleSubtitleFiles.firstOrNull())
+            }
+        }
+    }
+
+    /**
+     * 当存在多个同名字幕文件时，弹出选择对话框
+     */
+    private fun showSubtitleFilePicker(audioFile: File, subtitleFiles: List<File>) {
+        val fileNames = subtitleFiles.map { file ->
+            file.name + "  (" + FileUtils.formatFileSize(file.length()) + ")"
+        }.toTypedArray()
+
+        // 用自定义标题同时显示标题和提示信息（setItems 与 setView/setMessage 互斥）
+        val customTitle = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(8, 8, 8, 0)
+            addView(android.widget.TextView(context).apply {
+                text = "选择字幕文件"
+                textSize = 19f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setPadding(4, 0, 4, 6)
+            })
+            addView(android.widget.TextView(context).apply {
+                text = "音频「${audioFile.name}」同目录下存在多个字幕文件，请选择要打开的文件："
+                textSize = 14f
+                setPadding(4, 0, 4, 0)
+            })
+        }
+
+        AlertDialog.Builder(this)
+            .setCustomTitle(customTitle)
+            .setItems(fileNames) { _, which ->
+                openAudioWithSubtitle(audioFile, subtitleFiles[which])
+            }
+            .setNegativeButton("不加载字幕") { _, _ ->
+                openAudioWithSubtitle(audioFile, null)
+            }
+            .show()
+    }
+
+    /**
+     * 打开音频文件及指定字幕文件（字幕文件为 null 时仅打开音频）
+     */
+    private fun openAudioWithSubtitle(audioFile: File, subtitleFile: File?) {
         val intent = Intent(this, EditorActivity::class.java)
         intent.putExtra(EditorActivity.EXTRA_FILE_PATH, audioFile.absolutePath)
         intent.putExtra(EditorActivity.EXTRA_IS_AUDIO_FILE, true)
-        
-        // 查找可能的字幕文件
-        val possibleSubtitleFiles = FileUtils.getPossibleSubtitleFiles(audioFile)
-        if (possibleSubtitleFiles.isNotEmpty()) {
-            // 使用找到的第一个字幕文件（优先级：srt > lrc > ass > ...）
-            intent.putExtra(EditorActivity.EXTRA_SUBTITLE_FILE_PATH, possibleSubtitleFiles[0].absolutePath)
+        if (subtitleFile != null) {
+            intent.putExtra(EditorActivity.EXTRA_SUBTITLE_FILE_PATH, subtitleFile.absolutePath)
         }
-        
         startActivity(intent)
     }
     
