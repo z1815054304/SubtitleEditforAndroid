@@ -25,6 +25,13 @@ class ModelSettingsActivity : AppCompatActivity() {
     private var decoderPath: String = ""
     private var tokensPath: String = ""
     private var vadModelPath: String = ""
+    private var updatingVadThreshold = false
+
+    private companion object {
+        private const val VAD_THRESHOLD_MIN = 0.1f
+        private const val VAD_THRESHOLD_MAX = 0.9f
+        private const val VAD_THRESHOLD_STEP = 0.05f
+    }
 
     // Encoder 文件选择器
     private val encoderPickerLauncher = registerForActivityResult(
@@ -110,20 +117,51 @@ class ModelSettingsActivity : AppCompatActivity() {
     }
 
     private fun setupVadSettings() {
+        binding.sliderVadThreshold.valueFrom = VAD_THRESHOLD_MIN
+        binding.sliderVadThreshold.valueTo = VAD_THRESHOLD_MAX
+        binding.sliderVadThreshold.stepSize = VAD_THRESHOLD_STEP
+        binding.sliderVadThreshold.setLabelFormatter { value ->
+            String.format("%.2f", normalizeVadThreshold(value))
+        }
+
         // VAD 阈值
         binding.sliderVadThreshold.addOnChangeListener { _, value, fromUser ->
-            if (fromUser) binding.etVadThreshold.setText(String.format("%.2f", value))
-            settingsManager.setVadThreshold(value)
+            if (updatingVadThreshold) return@addOnChangeListener
+            val snapped = normalizeVadThreshold(value)
+            if (fromUser) {
+                updatingVadThreshold = true
+                if (!floatEquals(binding.sliderVadThreshold.value, snapped)) {
+                    binding.sliderVadThreshold.value = snapped
+                }
+                binding.etVadThreshold.setText(String.format("%.2f", snapped))
+                binding.etVadThreshold.setSelection(binding.etVadThreshold.text?.length ?: 0)
+                updatingVadThreshold = false
+            }
+            settingsManager.setVadThreshold(snapped)
         }
         binding.etVadThreshold.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                val v = s.toString().toFloatOrNull() ?: return
-                val clamped = v.coerceIn(0.1f, 0.9f)
-                val snapped = (Math.round(clamped / 0.05f) * 0.05f)
-                if (binding.sliderVadThreshold.value != snapped) binding.sliderVadThreshold.value = snapped
-                settingsManager.setVadThreshold(clamped)
+                if (updatingVadThreshold) return
+                val text = s.toString()
+                if (text.isBlank() || text.endsWith(".")) return
+                val v = text.toFloatOrNull() ?: return
+                val clamped = v.coerceIn(VAD_THRESHOLD_MIN, VAD_THRESHOLD_MAX)
+                val snapped = normalizeVadThreshold(clamped)
+                val normalized = String.format("%.2f", snapped)
+                val decimalLength = text.substringAfter('.', "").takeIf { text.contains('.') }?.length ?: 0
+                val shouldNormalizeText = decimalLength >= 2 || text.toFloatOrNull() != clamped
+                updatingVadThreshold = true
+                if (!floatEquals(binding.sliderVadThreshold.value, snapped)) {
+                    binding.sliderVadThreshold.value = snapped
+                }
+                if (shouldNormalizeText && text != normalized) {
+                    binding.etVadThreshold.setText(normalized)
+                    binding.etVadThreshold.setSelection(binding.etVadThreshold.text?.length ?: 0)
+                }
+                updatingVadThreshold = false
+                settingsManager.setVadThreshold(snapped)
             }
         })
 
@@ -207,6 +245,7 @@ class ModelSettingsActivity : AppCompatActivity() {
         val minSpeech = settingsManager.getVadMinSpeechDuration()
         val maxSpeech = settingsManager.getVadMaxSpeechDuration()
 
+        settingsManager.setVadThreshold(threshold)
         binding.sliderVadThreshold.value = threshold
         binding.etVadThreshold.setText(String.format("%.2f", threshold))
 
@@ -344,6 +383,16 @@ class ModelSettingsActivity : AppCompatActivity() {
             vadModelPath.isNotBlank() -> "当前使用：外部模型 ${getFileNameFromUri(Uri.parse(vadModelPath))}"
             else -> "当前使用：外部模型（未选择）"
         }
+    }
+
+    private fun normalizeVadThreshold(threshold: Float): Float {
+        val clamped = threshold.coerceIn(VAD_THRESHOLD_MIN, VAD_THRESHOLD_MAX)
+        val steps = Math.round((clamped - VAD_THRESHOLD_MIN) / VAD_THRESHOLD_STEP).coerceIn(0, 16)
+        return ((VAD_THRESHOLD_MIN * 100).toInt() + steps * 5) / 100f
+    }
+
+    private fun floatEquals(a: Float, b: Float): Boolean {
+        return kotlin.math.abs(a - b) < 0.0001f
     }
 
     private fun getFileNameFromUri(uri: Uri): String {

@@ -273,14 +273,14 @@ class SettingsManager private constructor(context: Context) {
      * 获取 VAD 阈值
      */
     fun getVadThreshold(): Float {
-        return prefs.getFloat(KEY_VAD_THRESHOLD, 0.3f)
+        return normalizeVadThreshold(prefs.getFloat(KEY_VAD_THRESHOLD, 0.3f))
     }
 
     /**
      * 设置 VAD 阈值
      */
     fun setVadThreshold(threshold: Float) {
-        prefs.edit().putFloat(KEY_VAD_THRESHOLD, threshold).apply()
+        prefs.edit().putFloat(KEY_VAD_THRESHOLD, normalizeVadThreshold(threshold)).apply()
     }
 
     /**
@@ -375,5 +375,11 @@ class SettingsManager private constructor(context: Context) {
 
     private fun providerKey(base: String, provider: String): String {
         return "${base}_$provider"
+    }
+
+    private fun normalizeVadThreshold(threshold: Float): Float {
+        val clamped = threshold.coerceIn(0.1f, 0.9f)
+        val steps = Math.round((clamped - 0.1f) / 0.05f).coerceIn(0, 16)
+        return (10 + steps * 5) / 100f
     }
 }
