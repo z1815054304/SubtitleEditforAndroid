@@ -1,6 +1,7 @@
 package com.subtitleedit.util
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
@@ -62,9 +63,20 @@ class VadTimestampGenerator(private val context: Context) {
     private fun initVad(): Vad? {
         return try {
             val settingsManager = SettingsManager.getInstance(context)
+            val useBuiltIn = settingsManager.isVadUseBuiltInModel()
+            val vadModelPath = settingsManager.getVadModelPath()
+            val vadFile = if (useBuiltIn) {
+                null
+            } else {
+                if (vadModelPath.isBlank()) {
+                    Log.e(TAG, "外部 VAD 模型未选择")
+                    return null
+                }
+                copyUriToCache(Uri.parse(vadModelPath), "auto_timestamp_vad.onnx") ?: return null
+            }
             val vadConfig = VadModelConfig(
                 sileroVadModelConfig = SileroVadModelConfig(
-                    model = "silero_vad.onnx",
+                    model = vadFile?.absolutePath ?: "silero_vad.onnx",
                     threshold = settingsManager.getVadThreshold(),
                     minSilenceDuration = settingsManager.getVadMinSilenceDuration(),
                     minSpeechDuration = settingsManager.getVadMinSpeechDuration(),
@@ -76,11 +88,35 @@ class VadTimestampGenerator(private val context: Context) {
                 provider = "cpu",
                 debug = true
             )
-            val vad = Vad(assetManager = context.assets, config = vadConfig)
-            Log.d(TAG, "VAD 初始化成功")
+            val vad = Vad(assetManager = if (useBuiltIn) context.assets else null, config = vadConfig)
+            Log.d(TAG, "VAD 初始化成功（${if (useBuiltIn) "内置模型" else "外部模型：${vadFile?.absolutePath}"}）")
             vad
         } catch (e: Exception) {
             Log.e(TAG, "VAD 初始化失败", e)
+            null
+        }
+    }
+
+    /**
+     * 复制外部 VAD 模型到缓存，供 native 层按文件路径读取
+     */
+    private fun copyUriToCache(uri: Uri, fileName: String): File? {
+        return try {
+            val cacheFile = File(context.cacheDir, fileName)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                cacheFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (cacheFile.exists()) {
+                Log.d(TAG, "外部 VAD 模型复制成功: ${cacheFile.absolutePath} (${cacheFile.length()} bytes)")
+                cacheFile
+            } else {
+                Log.e(TAG, "外部 VAD 模型复制失败: 文件不存在")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "复制外部 VAD 模型失败", e)
             null
         }
     }

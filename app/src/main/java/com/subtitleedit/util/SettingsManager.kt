@@ -29,6 +29,7 @@ class SettingsManager private constructor(context: Context) {
         private const val KEY_WHISPER_DECODER_PATH = "whisper_decoder_path"
         private const val KEY_WHISPER_TOKENS_PATH = "whisper_tokens_path"
         private const val KEY_VAD_MODEL_PATH = "vad_model_path"
+        private const val KEY_VAD_USE_BUILT_IN_MODEL = "vad_use_built_in_model"
         private const val KEY_VAD_THRESHOLD = "vad_threshold"
         private const val KEY_VAD_MIN_SILENCE_DURATION = "vad_min_silence_duration"
         private const val KEY_VAD_MIN_SPEECH_DURATION = "vad_min_speech_duration"
@@ -248,6 +249,24 @@ class SettingsManager private constructor(context: Context) {
      */
     fun setVadModelPath(path: String) {
         prefs.edit().putString(KEY_VAD_MODEL_PATH, path).apply()
+    }
+
+    /**
+     * 是否使用内置 VAD 模型
+     */
+    fun isVadUseBuiltInModel(): Boolean {
+        return if (prefs.contains(KEY_VAD_USE_BUILT_IN_MODEL)) {
+            prefs.getBoolean(KEY_VAD_USE_BUILT_IN_MODEL, true)
+        } else {
+            getVadModelPath().isBlank()
+        }
+    }
+
+    /**
+     * 设置是否使用内置 VAD 模型
+     */
+    fun setVadUseBuiltInModel(useBuiltIn: Boolean) {
+        prefs.edit().putBoolean(KEY_VAD_USE_BUILT_IN_MODEL, useBuiltIn).apply()
     }
 
     /**

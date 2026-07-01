@@ -95,6 +95,11 @@ class ModelSettingsActivity : AppCompatActivity() {
             vadPickerLauncher.launch(arrayOf("*/*"))
         }
 
+        binding.cbUseBuiltInVad.setOnCheckedChangeListener { _, isChecked ->
+            settingsManager.setVadUseBuiltInModel(isChecked)
+            updateVadModelUi()
+        }
+
         binding.btnSpeechAdvancedSettings.setOnClickListener {
             startActivity(Intent(this, SpeechToSubtitleSettingsActivity::class.java))
         }
@@ -180,6 +185,7 @@ class ModelSettingsActivity : AppCompatActivity() {
         decoderPath = settingsManager.getWhisperDecoderPath()
         tokensPath = settingsManager.getWhisperTokensPath()
         vadModelPath = settingsManager.getVadModelPath()
+        binding.cbUseBuiltInVad.isChecked = settingsManager.isVadUseBuiltInModel()
 
         if (encoderPath.isNotEmpty()) {
             val uri = Uri.parse(encoderPath)
@@ -193,10 +199,7 @@ class ModelSettingsActivity : AppCompatActivity() {
             val uri = Uri.parse(tokensPath)
             binding.tvTokensFile.text = getFileNameFromUri(uri)
         }
-        if (vadModelPath.isNotEmpty()) {
-            val uri = Uri.parse(vadModelPath)
-            binding.tvVadFile.text = "外部模型: ${getFileNameFromUri(uri)}"
-        }
+        updateVadModelUi()
 
         // 加载 VAD 参数
         val threshold = settingsManager.getVadThreshold()
@@ -322,11 +325,24 @@ class ModelSettingsActivity : AppCompatActivity() {
 
             vadModelPath = uri.toString()
             settingsManager.setVadModelPath(vadModelPath)
-            binding.tvVadFile.text = "外部模型: $fileName"
+            settingsManager.setVadUseBuiltInModel(false)
+            binding.cbUseBuiltInVad.isChecked = false
+            updateVadModelUi()
             com.subtitleedit.util.OverwritingToast.makeText(this, "外部 VAD 模型已选择", Toast.LENGTH_SHORT).show()
 
         } catch (e: Exception) {
             com.subtitleedit.util.OverwritingToast.makeText(this, "选择文件失败：${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun updateVadModelUi() {
+        val useBuiltIn = settingsManager.isVadUseBuiltInModel()
+        binding.btnSelectVad.isEnabled = !useBuiltIn
+        binding.btnSelectVad.alpha = if (useBuiltIn) 0.6f else 1f
+        binding.tvVadFile.text = when {
+            useBuiltIn -> "当前使用：内置 silero_vad.onnx"
+            vadModelPath.isNotBlank() -> "当前使用：外部模型 ${getFileNameFromUri(Uri.parse(vadModelPath))}"
+            else -> "当前使用：外部模型（未选择）"
         }
     }
 

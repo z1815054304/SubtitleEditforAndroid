@@ -185,6 +185,10 @@ class AutoTimestampActivity : AppCompatActivity() {
 
     private fun generateTimestamps() {
         if (selectedAudioUri == null) return
+        if (!settingsManager.isVadUseBuiltInModel() && settingsManager.getVadModelPath().isBlank()) {
+            com.subtitleedit.util.OverwritingToast.makeText(this, "请先选择外部 VAD 模型，或在模型设置中勾选使用内置", Toast.LENGTH_SHORT).show()
+            return
+        }
         val outputDir = outputDirUri ?: run {
             com.subtitleedit.util.OverwritingToast.makeText(this, "请选择输出目录", Toast.LENGTH_SHORT).show()
             return
@@ -404,10 +408,22 @@ class AutoTimestampActivity : AppCompatActivity() {
 
     private fun appendVadConfig() {
         appendOperationLog("VAD 配置：")
-        appendOperationLog("  模型：内置 silero_vad.onnx")
+        appendOperationLog("  模型：${getVadModelDisplayText()}")
         appendOperationLog("  采样率：16000Hz，线程：2，provider：cpu")
         appendOperationLog("  阈值：${settingsManager.getVadThreshold()}，最小静音：${settingsManager.getVadMinSilenceDuration()}s")
         appendOperationLog("  最小语音：${settingsManager.getVadMinSpeechDuration()}s，最大语音：${settingsManager.getVadMaxSpeechDuration()}s")
+    }
+
+    private fun getVadModelDisplayText(): String {
+        if (settingsManager.isVadUseBuiltInModel()) {
+            return "内置 silero_vad.onnx"
+        }
+        val path = settingsManager.getVadModelPath()
+        return if (path.isBlank()) {
+            "外部模型（未选择）"
+        } else {
+            "外部模型 ${Uri.parse(path).lastPathSegment ?: path}"
+        }
     }
 
     private fun appendVadSegments(segments: List<VadTimestampGenerator.VadSegment>) {

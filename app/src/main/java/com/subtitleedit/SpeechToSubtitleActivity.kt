@@ -295,6 +295,10 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
             com.subtitleedit.util.OverwritingToast.makeText(this, "请先选择文件和模型", Toast.LENGTH_SHORT).show()
             return
         }
+        if (shouldUseVad() && !settingsManager.isVadUseBuiltInModel() && vadModelPath.isBlank()) {
+            com.subtitleedit.util.OverwritingToast.makeText(this, "请先选择外部 VAD 模型，或在模型设置中勾选使用内置", Toast.LENGTH_SHORT).show()
+            return
+        }
         val outputDir = outputDirUri ?: run {
             com.subtitleedit.util.OverwritingToast.makeText(this, "输出目录未设置", Toast.LENGTH_SHORT).show()
             return
@@ -374,7 +378,7 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
                     encoderPath = encoderPath,
                     decoderPath = decoderPath,
                     tokensPath = tokensPath,
-                    vadModelPath = vadModelPath,
+                    vadModelPath = getActiveVadModelPath(),
                     useVad = shouldUseVad(),
                     language = selectedLanguage,
                     contentResolver = contentResolver,
@@ -606,10 +610,14 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
         appendRuntimeLog("  Whisper 线程：${settingsManager.getSpeechWhisperThreads()}")
         appendRuntimeLog("  VAD：${if (shouldUseVad()) "启用" else "禁用，固定分段 ${settingsManager.getSpeechFixedSegmentSeconds()} 秒"}")
         if (shouldUseVad()) {
-            appendRuntimeLog("  VAD 模型：${if (vadModelPath.isBlank()) "内置 silero_vad.onnx" else displayModelPath(vadModelPath)}")
+            appendRuntimeLog("  VAD 模型：${if (settingsManager.isVadUseBuiltInModel()) "内置 silero_vad.onnx" else displayModelPath(vadModelPath)}")
             appendRuntimeLog("  VAD 阈值：${settingsManager.getVadThreshold()}，最小静音：${settingsManager.getVadMinSilenceDuration()}s，最小语音：${settingsManager.getVadMinSpeechDuration()}s，最大语音：${settingsManager.getVadMaxSpeechDuration()}s")
         }
         appendRuntimeLog("  热词：${if (settingsManager.isSpeechHotwordsEnabled()) "启用，权重 ${settingsManager.getSpeechHotwordsScore()}" else "未启用"}")
+    }
+
+    private fun getActiveVadModelPath(): String {
+        return if (settingsManager.isVadUseBuiltInModel()) "" else vadModelPath
     }
 
     private fun displayModelPath(path: String): String {
