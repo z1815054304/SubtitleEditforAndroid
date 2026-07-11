@@ -81,14 +81,15 @@ class WhisperRecognizer(
                     val vadFile = copyUriToCache(Uri.parse(vadModelPath), "vad.onnx")
                     if (vadFile != null) {
                         Log.d(TAG, "  vad: ${vadFile.absolutePath}")
+                        val settingsManager = SettingsManager.getInstance(context)
                         val vadConfig = VadModelConfig(
                             sileroVadModelConfig = SileroVadModelConfig(
                                 model = vadFile.absolutePath,
-                                threshold = 0.3F,  // 适中的阈值
-                                minSilenceDuration = 0.3F,  // 0.3秒静音就分段
-                                minSpeechDuration = 0.25F,  // 最短语音 0.25 秒
+                                threshold = settingsManager.getVadThreshold(),
+                                minSilenceDuration = settingsManager.getVadMinSilenceDuration(),
+                                minSpeechDuration = settingsManager.getVadMinSpeechDuration(),
                                 windowSize = 512,
-                                maxSpeechDuration = 10.0F  // 单段最长 10 秒，超过就强制分段
+                                maxSpeechDuration = settingsManager.getVadMaxSpeechDuration()
                             ),
                             sampleRate = SAMPLE_RATE,
                             numThreads = 2,
