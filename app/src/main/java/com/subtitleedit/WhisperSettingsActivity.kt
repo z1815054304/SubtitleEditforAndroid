@@ -1,0 +1,53 @@
+package com.subtitleedit
+
+import android.os.Bundle
+import android.view.View
+import androidx.appcompat.app.AppCompatActivity
+import com.subtitleedit.databinding.ActivitySpeechToSubtitleSettingsBinding
+import com.subtitleedit.util.SettingsManager
+
+/** Whisper-specific controls. The shared layout also keeps the segmentation setting available. */
+class WhisperSettingsActivity : AppCompatActivity() {
+    private lateinit var binding: ActivitySpeechToSubtitleSettingsBinding
+    private lateinit var settings: SettingsManager
+    private var loading = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivitySpeechToSubtitleSettingsBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+        settings = SettingsManager.getInstance(this)
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        supportActionBar?.title = "Whisper 配置"
+        binding.toolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
+        binding.tvRecognitionFlowTitle.visibility = View.GONE
+        binding.tvFixedSegmentTitle.visibility = View.GONE
+        binding.tvFixedSegmentHint.visibility = View.GONE
+        binding.layoutFixedSegment.visibility = View.GONE
+
+        binding.sliderWhisperThreads.addOnChangeListener { _, value, _ ->
+            binding.tvWhisperThreads.text = value.toInt().toString()
+            if (!loading) settings.setSpeechWhisperThreads(value.toInt())
+        }
+        binding.switchHotwords.setOnCheckedChangeListener { _, checked ->
+            if (!loading) settings.setSpeechHotwordsEnabled(checked)
+        }
+        binding.sliderHotwordsScore.addOnChangeListener { _, value, _ ->
+            binding.tvHotwordsScore.text = String.format("%.1f", value)
+            if (!loading) settings.setSpeechHotwordsScore(value)
+        }
+        binding.btnSaveHotwords.setOnClickListener {
+            settings.setSpeechHotwords(binding.etHotwords.text?.toString().orEmpty())
+        }
+
+        loading = true
+        binding.sliderWhisperThreads.value = settings.getSpeechWhisperThreads().toFloat()
+        binding.tvWhisperThreads.text = settings.getSpeechWhisperThreads().toString()
+        binding.switchHotwords.isChecked = settings.isSpeechHotwordsEnabled()
+        binding.etHotwords.setText(settings.getSpeechHotwords())
+        binding.sliderHotwordsScore.value = settings.getSpeechHotwordsScore()
+        binding.tvHotwordsScore.text = String.format("%.1f", settings.getSpeechHotwordsScore())
+        loading = false
+    }
+}

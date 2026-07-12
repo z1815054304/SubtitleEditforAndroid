@@ -46,6 +46,7 @@
                     android:padding="16dp">
 
                     <TextView
+                        android:id="@+id/tvRecognitionFlowTitle"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="识别流程"
@@ -54,6 +55,7 @@
                         android:textStyle="bold" />
 
                     <TextView
+                        android:id="@+id/tvFixedSegmentTitle"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
@@ -62,6 +64,7 @@
                         android:textSize="14sp" />
 
                     <TextView
+                        android:id="@+id/tvFixedSegmentHint"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
@@ -70,6 +73,7 @@
                         android:textSize="12sp" />
 
                     <LinearLayout
+                        android:id="@+id/layoutFixedSegment"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
@@ -107,6 +111,7 @@
                     </LinearLayout>
 
                     <TextView
+                        android:id="@+id/tvWhisperThreadsTitle"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
@@ -115,6 +120,7 @@
                         android:textSize="14sp" />
 
                     <TextView
+                        android:id="@+id/tvWhisperThreadsHint"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
@@ -123,6 +129,7 @@
                         android:textSize="12sp" />
 
                     <LinearLayout
+                        android:id="@+id/layoutWhisperThreads"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
@@ -154,6 +161,7 @@
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardHotwords"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"

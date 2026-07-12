@@ -1,6 +1,7 @@
 package com.subtitleedit
 
 import android.os.Bundle
+import android.view.View
 import android.text.Editable
 import android.text.TextWatcher
 import android.widget.Toast
@@ -25,6 +26,10 @@ class SpeechToSubtitleSettingsActivity : AppCompatActivity() {
         setupToolbar()
         setupListeners()
         loadSettings()
+        binding.tvWhisperThreadsTitle.visibility = View.GONE
+        binding.tvWhisperThreadsHint.visibility = View.GONE
+        binding.layoutWhisperThreads.visibility = View.GONE
+        binding.cardHotwords.visibility = View.GONE
     }
 
     private fun setupToolbar() {

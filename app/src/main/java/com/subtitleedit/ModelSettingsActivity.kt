@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +26,7 @@ class ModelSettingsActivity : AppCompatActivity() {
     private var decoderPath: String = ""
     private var tokensPath: String = ""
     private var vadModelPath: String = ""
+    private var modelType: String = SettingsManager.ASR_MODEL_WHISPER
     private var updatingVadThreshold = false
 
     private companion object {
@@ -109,6 +111,11 @@ class ModelSettingsActivity : AppCompatActivity() {
 
         binding.btnSpeechAdvancedSettings.setOnClickListener {
             startActivity(Intent(this, SpeechToSubtitleSettingsActivity::class.java))
+        }
+
+        binding.btnSwitchAsrModel.setOnClickListener { showAsrModelPicker() }
+        binding.btnWhisperConfig.setOnClickListener {
+            startActivity(Intent(this, WhisperSettingsActivity::class.java))
         }
 
         binding.tvModelGuide.setOnClickListener {
@@ -219,9 +226,8 @@ class ModelSettingsActivity : AppCompatActivity() {
 
     private fun loadSavedSettings() {
         // 加载模型路径
-        encoderPath = settingsManager.getWhisperEncoderPath()
-        decoderPath = settingsManager.getWhisperDecoderPath()
-        tokensPath = settingsManager.getWhisperTokensPath()
+        modelType = settingsManager.getAsrModelType()
+        loadModelPaths()
         vadModelPath = settingsManager.getVadModelPath()
         binding.cbUseBuiltInVad.isChecked = settingsManager.isVadUseBuiltInModel()
 
@@ -238,6 +244,7 @@ class ModelSettingsActivity : AppCompatActivity() {
             binding.tvTokensFile.text = getFileNameFromUri(uri)
         }
         updateVadModelUi()
+        updateAsrModelUi()
 
         // 加载 VAD 参数
         val threshold = settingsManager.getVadThreshold()
@@ -268,18 +275,24 @@ class ModelSettingsActivity : AppCompatActivity() {
 
             val fileName = getFileNameFromUri(uri)
 
-            if (!fileName.contains("encoder", ignoreCase = true) ||
-                !fileName.endsWith(".onnx", ignoreCase = true)) {
+            val isValid = fileName.endsWith(".onnx", ignoreCase = true) &&
+                (modelType == SettingsManager.ASR_MODEL_SENSEVOICE || fileName.contains("encoder", ignoreCase = true))
+            if (!isValid) {
                 com.subtitleedit.util.OverwritingToast.makeText(
                     this,
-                    "请选择 encoder 模型文件（文件名应包含 'encoder' 且以 .onnx 结尾）",
+                    if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) "请选择 SenseVoice 模型文件（以 .onnx 结尾）"
+                    else "请选择 encoder 模型文件（文件名应包含 'encoder' 且以 .onnx 结尾）",
                     Toast.LENGTH_LONG
                 ).show()
                 return
             }
 
             encoderPath = uri.toString()
-            settingsManager.setWhisperEncoderPath(encoderPath)
+            if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) {
+                settingsManager.setSenseVoiceModelPath(encoderPath)
+            } else {
+                settingsManager.setWhisperEncoderPath(encoderPath)
+            }
             binding.tvEncoderFile.text = fileName
 
         } catch (e: Exception) {
@@ -335,7 +348,11 @@ class ModelSettingsActivity : AppCompatActivity() {
             }
 
             tokensPath = uri.toString()
-            settingsManager.setWhisperTokensPath(tokensPath)
+            if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) {
+                settingsManager.setSenseVoiceTokensPath(tokensPath)
+            } else {
+                settingsManager.setWhisperTokensPath(tokensPath)
+            }
             binding.tvTokensFile.text = fileName
 
         } catch (e: Exception) {
@@ -408,7 +425,21 @@ class ModelSettingsActivity : AppCompatActivity() {
     }
 
     private fun showModelGuide() {
-        val message = """
+        val message = if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) """
+            SenseVoice 模型下载指引：
+
+            1. 访问 GitHub 下载页面：
+               https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+
+            2. 下载普通 CPU ONNX 模型包：
+               sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09
+
+            3. 分别选择：
+               • model.int8.onnx（或 model.onnx）
+               • tokens.txt
+
+            当前仅支持普通 ONNX 模型，不支持 QNN/NPU 模型包。
+        """.trimIndent() else """
             Whisper 模型下载指引：
 
             1. 访问 GitHub 下载页面：
@@ -442,5 +473,49 @@ class ModelSettingsActivity : AppCompatActivity() {
                 startActivity(intent)
             }
             .show()
+    }
+
+    private fun showAsrModelPicker() {
+        val labels = arrayOf("Whisper", "SenseVoice")
+        val checked = if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) 1 else 0
+        AlertDialog.Builder(this)
+            .setTitle("选择识别模型")
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                val selectedType = if (which == 1) SettingsManager.ASR_MODEL_SENSEVOICE else SettingsManager.ASR_MODEL_WHISPER
+                if (selectedType != modelType) {
+                    modelType = selectedType
+                    settingsManager.setAsrModelType(selectedType)
+                    loadModelPaths()
+                    updateAsrModelUi()
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun loadModelPaths() {
+        if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) {
+            encoderPath = settingsManager.getSenseVoiceModelPath()
+            decoderPath = ""
+            tokensPath = settingsManager.getSenseVoiceTokensPath()
+        } else {
+            encoderPath = settingsManager.getWhisperEncoderPath()
+            decoderPath = settingsManager.getWhisperDecoderPath()
+            tokensPath = settingsManager.getWhisperTokensPath()
+        }
+        binding.tvEncoderFile.text = encoderPath.takeIf { it.isNotEmpty() }?.let { getFileNameFromUri(Uri.parse(it)) } ?: "未选择"
+        binding.tvDecoderFile.text = decoderPath.takeIf { it.isNotEmpty() }?.let { getFileNameFromUri(Uri.parse(it)) } ?: "未选择"
+        binding.tvTokensFile.text = tokensPath.takeIf { it.isNotEmpty() }?.let { getFileNameFromUri(Uri.parse(it)) } ?: "未选择"
+    }
+
+    private fun updateAsrModelUi() {
+        val senseVoice = modelType == SettingsManager.ASR_MODEL_SENSEVOICE
+        binding.tvAsrModelTitle.text = if (senseVoice) "SenseVoice 模型" else "Whisper 模型"
+        binding.tvModelHint.text = if (senseVoice) "需要下载普通 SenseVoice ONNX 模型文件才能使用语音转字幕功能" else "需要下载 Whisper 模型文件才能使用语音转字幕功能"
+        binding.tvEncoderLabel.text = if (senseVoice) "SenseVoice 模型" else "Encoder 模型"
+        binding.btnSelectEncoder.text = if (senseVoice) "选择模型" else "选择 Encoder"
+        binding.layoutDecoder.visibility = if (senseVoice) View.GONE else View.VISIBLE
+        binding.btnWhisperConfig.visibility = if (senseVoice) View.GONE else View.VISIBLE
     }
 }

@@ -28,6 +28,9 @@ class SettingsManager private constructor(context: Context) {
         private const val KEY_WHISPER_ENCODER_PATH = "whisper_encoder_path"
         private const val KEY_WHISPER_DECODER_PATH = "whisper_decoder_path"
         private const val KEY_WHISPER_TOKENS_PATH = "whisper_tokens_path"
+        private const val KEY_ASR_MODEL_TYPE = "asr_model_type"
+        private const val KEY_SENSEVOICE_MODEL_PATH = "sensevoice_model_path"
+        private const val KEY_SENSEVOICE_TOKENS_PATH = "sensevoice_tokens_path"
         private const val KEY_VAD_MODEL_PATH = "vad_model_path"
         private const val KEY_VAD_USE_BUILT_IN_MODEL = "vad_use_built_in_model"
         private const val KEY_VAD_THRESHOLD = "vad_threshold"
@@ -47,6 +50,9 @@ class SettingsManager private constructor(context: Context) {
         const val THEME_LIGHT = "light"
         const val THEME_DARK = "dark"
         const val THEME_SYSTEM = "system"
+
+        const val ASR_MODEL_WHISPER = "whisper"
+        const val ASR_MODEL_SENSEVOICE = "sensevoice"
         
         @Volatile private var instance: SettingsManager? = null
         
@@ -235,6 +241,26 @@ class SettingsManager private constructor(context: Context) {
      */
     fun setWhisperTokensPath(path: String) {
         prefs.edit().putString(KEY_WHISPER_TOKENS_PATH, path).apply()
+    }
+
+    fun getAsrModelType(): String = prefs.getString(KEY_ASR_MODEL_TYPE, ASR_MODEL_WHISPER)
+        ?.takeIf { it == ASR_MODEL_WHISPER || it == ASR_MODEL_SENSEVOICE }
+        ?: ASR_MODEL_WHISPER
+
+    fun setAsrModelType(type: String) {
+        prefs.edit().putString(KEY_ASR_MODEL_TYPE, type).apply()
+    }
+
+    fun getSenseVoiceModelPath(): String = prefs.getString(KEY_SENSEVOICE_MODEL_PATH, "") ?: ""
+
+    fun setSenseVoiceModelPath(path: String) {
+        prefs.edit().putString(KEY_SENSEVOICE_MODEL_PATH, path).apply()
+    }
+
+    fun getSenseVoiceTokensPath(): String = prefs.getString(KEY_SENSEVOICE_TOKENS_PATH, "") ?: ""
+
+    fun setSenseVoiceTokensPath(path: String) {
+        prefs.edit().putString(KEY_SENSEVOICE_TOKENS_PATH, path).apply()
     }
 
     /**

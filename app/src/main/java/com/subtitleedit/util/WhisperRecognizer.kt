@@ -20,7 +20,8 @@ class WhisperRecognizer(
     private val useVad: Boolean = true,
     private val language: String = "auto",
     private val contentResolver: ContentResolver,
-    private val context: Context
+    private val context: Context,
+    private val modelType: String = SettingsManager.ASR_MODEL_WHISPER
 ) {
 
     companion object {
@@ -62,14 +63,17 @@ class WhisperRecognizer(
     private fun initRecognizer(): Result<Unit> {
         return try {
             // 将 URI 转换为本地文件路径
-            val encoderFile = copyUriToCache(Uri.parse(encoderPath), "encoder.onnx")
-            val decoderFile = copyUriToCache(Uri.parse(decoderPath), "decoder.onnx")
+            val encoderFile = copyUriToCache(
+                Uri.parse(encoderPath),
+                if (isSenseVoice()) "sensevoice.onnx" else "encoder.onnx"
+            )
+            val decoderFile = if (isSenseVoice()) null else copyUriToCache(Uri.parse(decoderPath), "decoder.onnx")
             val tokensFile = copyUriToCache(Uri.parse(tokensPath), "tokens.txt")
 
             if (encoderFile == null) {
                 return Result.failure(Exception("无法读取 encoder 文件"))
             }
-            if (decoderFile == null) {
+            if (!isSenseVoice() && decoderFile == null) {
                 return Result.failure(Exception("无法读取 decoder 文件"))
             }
             if (tokensFile == null) {
@@ -77,8 +81,8 @@ class WhisperRecognizer(
             }
 
             Log.d(TAG, "模型文件准备完成:")
-            Log.d(TAG, "  encoder: ${encoderFile.absolutePath}")
-            Log.d(TAG, "  decoder: ${decoderFile.absolutePath}")
+            Log.d(TAG, "  ${if (isSenseVoice()) "model" else "encoder"}: ${encoderFile.absolutePath}")
+            decoderFile?.let { Log.d(TAG, "  decoder: ${it.absolutePath}") }
             Log.d(TAG, "  tokens: ${tokensFile.absolutePath}")
 
             if (useVad) {
@@ -137,10 +141,22 @@ class WhisperRecognizer(
                 Log.d(TAG, "已禁用 VAD 分段，将使用固定分段识别")
             }
 
-            val modelConfig = OfflineModelConfig(
+            val modelConfig = if (isSenseVoice()) {
+                OfflineModelConfig(
+                    senseVoice = OfflineSenseVoiceModelConfig(
+                        model = encoderFile.absolutePath,
+                        language = mapSenseVoiceLanguage(language),
+                        useInverseTextNormalization = true
+                    ),
+                    tokens = tokensFile.absolutePath,
+                    numThreads = 4,
+                    debug = true,
+                    provider = "cpu"
+                )
+            } else OfflineModelConfig(
                 whisper = OfflineWhisperModelConfig(
                     encoder = encoderFile.absolutePath,
-                    decoder = decoderFile.absolutePath,
+                    decoder = decoderFile!!.absolutePath,
                     language = if (language == "自动检测") "" else mapLanguage(language),
                     task = "transcribe",
                     tailPaddings = 1000,
@@ -159,7 +175,7 @@ class WhisperRecognizer(
                     featureDim = 80
                 ),
                 modelConfig = modelConfig,
-                hotwordsScore = settingsManager().getSpeechHotwordsScore()
+                hotwordsScore = if (isSenseVoice()) 1.0f else settingsManager().getSpeechHotwordsScore()
             )
 
             Log.d(TAG, "开始初始化 OfflineRecognizer...")
@@ -169,7 +185,7 @@ class WhisperRecognizer(
                 return Result.failure(Exception("OfflineRecognizer 初始化返回 null"))
             }
 
-            Log.d(TAG, "Whisper 识别器初始化成功")
+            Log.d(TAG, "${if (isSenseVoice()) "SenseVoice" else "Whisper"} 识别器初始化成功")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "初始化识别器失败", e)
@@ -389,7 +405,7 @@ class WhisperRecognizer(
 
             Log.d(TAG, "创建 stream...")
             val stream = try {
-                val hotwords = buildSpeechHotwords()
+                val hotwords = if (isSenseVoice()) "" else buildSpeechHotwords()
                 if (hotwords.isEmpty()) {
                     rec.createStream()
                 } else {
@@ -556,6 +572,16 @@ class WhisperRecognizer(
             Log.e(TAG, "释放资源失败", e)
         }
     }
+
+    private fun mapSenseVoiceLanguage(language: String): String = when (language) {
+        "中文" -> "zh"
+        "英语" -> "en"
+        "日语" -> "ja"
+        "韩语" -> "ko"
+        else -> "auto"
+    }
+
+    private fun isSenseVoice(): Boolean = modelType == SettingsManager.ASR_MODEL_SENSEVOICE
 
     /**
      * 为 VAD 原始段构建识别窗口。相邻段共享的静音间隔最多各使用一半，
