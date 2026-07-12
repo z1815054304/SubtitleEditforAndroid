@@ -2677,13 +2677,9 @@ class EditorActivity : AppCompatActivity() {
     private fun refreshWaveformToolbarState() {
         val isSpectrogram = currentDisplayMode == WaveformTimelineView.DisplayMode.SPECTROGRAM
 
-        // 标签文字：显示当前正在展示的内容名称
-        (binding.tvWaveformLabel as? android.widget.TextView)?.text =
-            if (isSpectrogram) "频谱图" else "波形图"
-
-        // 模式切换按钮文字：显示点击后将切换到的目标模式
+        // 模式切换按钮文字：显示当前正在展示的模式
         (binding.btnToggleDisplayMode as? android.widget.TextView)?.text =
-            if (isSpectrogram) "波形" else "频谱"
+            if (isSpectrogram) "频谱" else "波形"
 
         // 振幅按钮：频谱模式下或折叠时禁用
         val amplEnabled = isWaveformExpanded && !isSpectrogram

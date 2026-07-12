@@ -234,23 +234,17 @@
                             android:padding="3dp"
                             android:contentDescription="插入字幕（打轴）" />
 
-                        <!-- 标签 -->
-                        <TextView
-                            android:id="@+id/tvWaveformLabel"
+                        <Space
                             android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="波形图"
-                            android:textSize="11sp"
-                            android:paddingStart="6dp"
-                            android:textColor="#9E9E9E"/>
+                            android:layout_height="1dp"
+                            android:layout_weight="1" />
 
                         <!-- 模式切换：波形 ↔ 频谱 -->
                         <TextView
                             android:id="@+id/btnToggleDisplayMode"
                             android:layout_width="wrap_content"
                             android:layout_height="24dp"
-                            android:text="频谱"
+                            android:text="波形"
                             android:paddingStart="8dp"
                             android:paddingEnd="8dp"
                             android:gravity="center"
