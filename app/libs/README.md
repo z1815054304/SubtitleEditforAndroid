@@ -2,7 +2,7 @@
 
 ## ✅ 集成已完成
 
-sherpa-onnx v1.12.35 已成功集成到项目中。
+sherpa-onnx v1.13.4 已成功集成到项目中。
 
 ### 集成内容
 
@@ -29,8 +29,8 @@ val recognizer = OfflineRecognizer(config)
 
 ### 源文件
 
-- 原始包：`sherpa-onnx-v1.12.35-android.tar.bz2` (42MB)
-- 下载地址：https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.12.35
+- 原始包：`sherpa-onnx-v1.13.4-android.tar.bz2` (45MB)
+- 下载地址：https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.4
 
 ### 注意事项
 
