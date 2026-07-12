@@ -26,6 +26,7 @@ class WhisperRecognizer(
     companion object {
         private const val TAG = "WhisperRecognizer"
         private const val SAMPLE_RATE = 16000 // Whisper 需要 16kHz
+        private const val VAD_CONTEXT_PADDING_MS = 500L
     }
 
     private var recognizer: OfflineRecognizer? = null
@@ -48,6 +49,11 @@ class WhisperRecognizer(
         val sampleCount: Int,  // 语音段采样点数量
         val startTime: Long,   // 起始时间（毫秒）
         val endTime: Long      // 结束时间（毫秒）
+    )
+
+    private data class RecognitionWindow(
+        val startSample: Long,
+        val sampleCount: Int
     )
 
     /**
@@ -224,7 +230,6 @@ class WhisperRecognizer(
             Pcm16WavReader(audioFile).use { reader ->
                 val totalSamples = reader.totalSamples
                 val totalDurationMs = (totalSamples * 1000L) / SAMPLE_RATE
-                val settings = settingsManager()
 
                 Log.d(
                     TAG,
@@ -262,15 +267,33 @@ class WhisperRecognizer(
                             null
                         )
 
-                        Log.d(TAG, "识别语音段 ${index + 1}/${vadSegments.size} (${vadSegment.startTime}ms - ${vadSegment.endTime}ms)")
+                        val recognitionWindow = createRecognitionWindow(
+                            segments = vadSegments,
+                            index = index,
+                            totalSamples = totalSamples
+                        )
+                        val recognitionStartTimeMs =
+                            (recognitionWindow.startSample * 1000L) / SAMPLE_RATE
+                        val recognitionEndTimeMs =
+                            ((recognitionWindow.startSample + recognitionWindow.sampleCount) * 1000L) / SAMPLE_RATE
 
-                        val segmentData = reader.readRange(
-                            startSample = vadSegment.startSample.toLong(),
-                            sampleCount = vadSegment.sampleCount
+                        Log.d(
+                            TAG,
+                            "识别语音段 ${index + 1}/${vadSegments.size}: " +
+                                "原始 ${vadSegment.startTime}ms - ${vadSegment.endTime}ms, " +
+                                "padding 后 ${recognitionStartTimeMs}ms - ${recognitionEndTimeMs}ms"
                         )
 
-                        // 识别当前语音段
-                        val segments = recognizeSegment(segmentData, vadSegment.startTime)
+                        val segmentData = reader.readRange(
+                            startSample = recognitionWindow.startSample,
+                            sampleCount = recognitionWindow.sampleCount
+                        )
+
+                        // 先以 padding 后窗口为原点换算 token 时间，再回收至原始 VAD 时间轴。
+                        val segments = constrainToVadRange(
+                            recognizeSegment(segmentData, recognitionStartTimeMs),
+                            vadSegment
+                        )
                         allSegments.addAll(segments)
 
                         // 实时返回识别结果
@@ -531,6 +554,72 @@ class WhisperRecognizer(
             Log.d(TAG, "识别器资源已释放")
         } catch (e: Exception) {
             Log.e(TAG, "释放资源失败", e)
+        }
+    }
+
+    /**
+     * 为 VAD 原始段构建识别窗口。相邻段共享的静音间隔最多各使用一半，
+     * 因此 padding 不会覆盖相邻语音，避免重复识别同一段内容。
+     */
+    private fun createRecognitionWindow(
+        segments: List<VadSegment>,
+        index: Int,
+        totalSamples: Long
+    ): RecognitionWindow {
+        val current = segments[index]
+        val currentStart = current.startSample.toLong().coerceIn(0L, totalSamples)
+        val currentEnd = (current.startSample.toLong() + current.sampleCount)
+            .coerceIn(currentStart, totalSamples)
+
+        val previousEnd = if (index > 0) {
+            val previous = segments[index - 1]
+            (previous.startSample.toLong() + previous.sampleCount)
+                .coerceIn(0L, currentStart)
+        } else {
+            0L
+        }
+        val nextStart = if (index < segments.lastIndex) {
+            segments[index + 1].startSample.toLong().coerceIn(currentEnd, totalSamples)
+        } else {
+            totalSamples
+        }
+
+        val targetPaddingSamples = (VAD_CONTEXT_PADDING_MS * SAMPLE_RATE) / 1000L
+        val leftPadding = minOf(targetPaddingSamples, (currentStart - previousEnd) / 2)
+        val rightPadding = minOf(targetPaddingSamples, (nextStart - currentEnd) / 2)
+        val startSample = currentStart - leftPadding
+        val endSample = currentEnd + rightPadding
+
+        return RecognitionWindow(
+            startSample = startSample,
+            sampleCount = (endSample - startSample).toInt()
+        )
+    }
+
+    /**
+     * Padding 只服务于识别上下文，字幕时间轴仍以原始 VAD 段为准。
+     */
+    private fun constrainToVadRange(
+        recognizedSegments: List<SubtitleSegment>,
+        vadSegment: VadSegment
+    ): List<SubtitleSegment> {
+        val constrained = recognizedSegments.mapNotNull { segment ->
+            val startTime = segment.startTime.coerceIn(vadSegment.startTime, vadSegment.endTime)
+            val endTime = segment.endTime.coerceIn(vadSegment.startTime, vadSegment.endTime)
+            if (endTime > startTime) {
+                segment.copy(startTime = startTime, endTime = endTime)
+            } else {
+                null
+            }
+        }
+
+        if (constrained.isEmpty()) return emptyList()
+
+        return constrained.mapIndexed { index, segment ->
+            segment.copy(
+                startTime = if (index == 0) vadSegment.startTime else segment.startTime,
+                endTime = if (index == constrained.lastIndex) vadSegment.endTime else segment.endTime
+            )
         }
     }
 
