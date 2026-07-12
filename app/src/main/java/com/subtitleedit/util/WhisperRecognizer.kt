@@ -142,10 +142,12 @@ class WhisperRecognizer(
             }
 
             val modelConfig = if (isSenseVoice()) {
+                val senseVoiceLanguage = mapSenseVoiceLanguage(language)
+                Log.d(TAG, "SenseVoice language=$senseVoiceLanguage (selected=$language)")
                 OfflineModelConfig(
                     senseVoice = OfflineSenseVoiceModelConfig(
                         model = encoderFile.absolutePath,
-                        language = mapSenseVoiceLanguage(language),
+                        language = senseVoiceLanguage,
                         useInverseTextNormalization = true
                     ),
                     tokens = tokensFile.absolutePath,

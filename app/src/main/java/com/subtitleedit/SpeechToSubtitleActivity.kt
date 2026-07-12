@@ -52,6 +52,13 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
     private var isCancelled = false
     private var pendingSubtitleContent: String = ""
     private val realtimeResults = StringBuilder()
+    private var logRenderScheduled = false
+    private var lastProgressLog = ""
+
+    private companion object {
+        private const val MAX_VISIBLE_LOG_CHARS = 16_000
+        private const val LOG_RENDER_INTERVAL_MS = 100L
+    }
 
     // 语言选项
     private val languageOptions = listOf(
@@ -189,6 +196,11 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!isConverting) loadSavedModel(resetOutputDirectory = false)
+    }
+
     private fun setupScrollableLogs() {
         binding.realtimeResultScroll.setOnTouchListener { view, event ->
             view.parent.requestDisallowInterceptTouchEvent(true)
@@ -202,7 +214,7 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
     /**
      * 加载已保存的模型路径
      */
-    private fun loadSavedModel() {
+    private fun loadSavedModel(resetOutputDirectory: Boolean = true) {
         modelType = settingsManager.getAsrModelType()
         if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) {
             encoderPath = settingsManager.getSenseVoiceModelPath()
@@ -215,8 +227,9 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
         }
         vadModelPath = settingsManager.getVadModelPath()
 
-        // 设置默认输出目录
-        setupDefaultOutputDir()
+        if (resetOutputDirectory) {
+            setupDefaultOutputDir()
+        }
 
         updateStartButtonState()
     }
@@ -336,6 +349,7 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
     private fun startConversion(overwriteOutput: Boolean) {
         isCancelled = false
         realtimeResults.clear()
+        lastProgressLog = ""
         conversionJob = lifecycleScope.launch {
             try {
                 isConverting = true
@@ -382,6 +396,9 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
                 showProgress("正在识别语音...", 10)
                 val selectedLanguage = languageOptions[binding.spinnerSourceLanguage.selectedItemPosition]
                 appendRuntimeLog("识别：初始化 ${if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) "SenseVoice" else "Whisper"} 模型并开始识别")
+                if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) {
+                    appendRuntimeLog("SenseVoice 指定语言：$selectedLanguage (${senseVoiceLanguageCode(selectedLanguage)})")
+                }
                 val recognizer = WhisperRecognizer(
                     encoderPath = encoderPath,
                     decoderPath = decoderPath,
@@ -571,7 +588,10 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
         binding.btnCancel.visibility = View.VISIBLE
         binding.progressIndicator.progress = progress
         binding.tvProgressStatus.text = status
-        appendRuntimeLog(status)
+        if (status != lastProgressLog) {
+            lastProgressLog = status
+            appendRuntimeLog(status)
+        }
     }
 
     /**
@@ -595,20 +615,16 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
 
     private fun appendRuntimeLog(message: String) {
         realtimeResults.append("[${formatClockTime()}] $message\n")
-        binding.tvRealtimeResult.text = realtimeResults.toString()
-        binding.realtimeResultScroll.post {
-            binding.realtimeResultScroll.fullScroll(View.FOCUS_DOWN)
-        }
+        trimVisibleLog()
+        scheduleLogRender()
     }
 
     private fun appendRecognizedSegment(segment: WhisperRecognizer.SubtitleSegment) {
         realtimeResults.append("\n")
         realtimeResults.append("[${formatSubtitleTime(segment.startTime)} --> ${formatSubtitleTime(segment.endTime)}]\n")
         realtimeResults.append(segment.text).append("\n")
-        binding.tvRealtimeResult.text = realtimeResults.toString()
-        binding.realtimeResultScroll.post {
-            binding.realtimeResultScroll.fullScroll(View.FOCUS_DOWN)
-        }
+        trimVisibleLog()
+        scheduleLogRender()
     }
 
     private fun appendSpeechModelConfig() {
@@ -632,6 +648,29 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
 
     private fun displayModelPath(path: String): String {
         return if (path.isBlank()) "未设置" else Uri.parse(path).lastPathSegment ?: path
+    }
+
+    private fun senseVoiceLanguageCode(language: String): String = when (language) {
+        "中文" -> "zh"
+        "英语" -> "en"
+        "日语" -> "ja"
+        "韩语" -> "ko"
+        else -> "auto"
+    }
+
+    private fun trimVisibleLog() {
+        val overflow = realtimeResults.length - MAX_VISIBLE_LOG_CHARS
+        if (overflow > 0) realtimeResults.delete(0, overflow)
+    }
+
+    private fun scheduleLogRender() {
+        if (logRenderScheduled) return
+        logRenderScheduled = true
+        binding.tvRealtimeResult.postDelayed({
+            binding.tvRealtimeResult.text = realtimeResults.toString()
+            binding.realtimeResultScroll.fullScroll(View.FOCUS_DOWN)
+            logRenderScheduled = false
+        }, LOG_RENDER_INTERVAL_MS)
     }
 
     private fun formatClockTime(): String {

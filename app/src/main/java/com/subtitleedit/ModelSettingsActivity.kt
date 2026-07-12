@@ -33,6 +33,8 @@ class ModelSettingsActivity : AppCompatActivity() {
         private const val VAD_THRESHOLD_MIN = 0.1f
         private const val VAD_THRESHOLD_MAX = 0.9f
         private const val VAD_THRESHOLD_STEP = 0.05f
+        private const val SENSEVOICE_MODEL_DOWNLOAD_URL =
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
     }
 
     // Encoder 文件选择器
@@ -120,6 +122,10 @@ class ModelSettingsActivity : AppCompatActivity() {
 
         binding.tvModelGuide.setOnClickListener {
             showModelGuide()
+        }
+
+        binding.tvQuickDownload.setOnClickListener {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SENSEVOICE_MODEL_DOWNLOAD_URL)))
         }
     }
 
@@ -432,13 +438,12 @@ class ModelSettingsActivity : AppCompatActivity() {
                https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
 
             2. 下载普通 CPU ONNX 模型包：
-               sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09
+               sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
 
             3. 分别选择：
                • model.int8.onnx（或 model.onnx）
                • tokens.txt
 
-            当前仅支持普通 ONNX 模型，不支持 QNN/NPU 模型包。
         """.trimIndent() else """
             Whisper 模型下载指引：
 
@@ -446,22 +451,12 @@ class ModelSettingsActivity : AppCompatActivity() {
                https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
 
             2. 下载模型文件（需要以下 3 个文件）：
-               • encoder.onnx（或 large-v3-encoder.onnx）
-               • decoder.onnx（或 large-v3-decoder.int8.onnx）
+               • encoder.onnx
+               • decoder.onnx
                • tokens.txt
 
             3. 分别点击"选择 Encoder"、"选择 Decoder"、"选择 Tokens"按钮选择对应文件
 
-            推荐模型：
-            • Whisper Tiny (~40MB) - 快速，适合实时
-            • Whisper Base (~75MB) - 平衡性能和质量
-            • Whisper Small (~250MB) - 高质量
-            • Whisper Large V3 (~3GB) - 最高质量
-
-            VAD 模型（可选，已内置）：
-            • 项目已内置 silero_vad.onnx 模型
-            • 如需使用外部模型，可从上述链接下载
-            • 作用：精确检测语音段，提高字幕时间轴准确性
         """.trimIndent()
 
         AlertDialog.Builder(this)
@@ -512,7 +507,7 @@ class ModelSettingsActivity : AppCompatActivity() {
     private fun updateAsrModelUi() {
         val senseVoice = modelType == SettingsManager.ASR_MODEL_SENSEVOICE
         binding.tvAsrModelTitle.text = if (senseVoice) "SenseVoice 模型" else "Whisper 模型"
-        binding.tvModelHint.text = if (senseVoice) "需要下载普通 SenseVoice ONNX 模型文件才能使用语音转字幕功能" else "需要下载 Whisper 模型文件才能使用语音转字幕功能"
+        binding.tvQuickDownload.visibility = if (senseVoice) View.VISIBLE else View.GONE
         binding.tvEncoderLabel.text = if (senseVoice) "SenseVoice 模型" else "Encoder 模型"
         binding.btnSelectEncoder.text = if (senseVoice) "选择模型" else "选择 Encoder"
         binding.layoutDecoder.visibility = if (senseVoice) View.GONE else View.VISIBLE
