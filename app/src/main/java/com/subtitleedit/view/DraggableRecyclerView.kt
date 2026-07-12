@@ -56,6 +56,7 @@ class DraggableRecyclerView @JvmOverloads constructor(
     private var pendingScrollRatio: Float? = null
     private var scrollFramePosted = false
     private var lastThumbAdapterPosition = RecyclerView.NO_POSITION
+    private var thumbDragPositionCorrection = 0
 
     // 高频 MOVE 事件只保留最后一个目标位置，每帧最多触发一次 RecyclerView 布局。
     private val applyPendingScrollRunnable = Runnable {
@@ -103,6 +104,7 @@ class DraggableRecyclerView @JvmOverloads constructor(
                     stopScroll()
                     isDraggingThumb = true
                     dragOffsetY = ev.y - paddingTop - computeThumbTop()
+                    captureThumbDragAnchor()
                     parent?.requestDisallowInterceptTouchEvent(true)
                     showThumb()
                     return true
@@ -161,6 +163,10 @@ class DraggableRecyclerView @JvmOverloads constructor(
         }
     }
 
+    fun showDragThumb() {
+        if (canDragThumb()) showThumb()
+    }
+
     private fun scheduleFadeOut() {
         removeCallbacks(startFadeRunnable)
         removeCallbacks(fadeRunnable)
@@ -217,7 +223,9 @@ class DraggableRecyclerView @JvmOverloads constructor(
         val linearLayoutManager = layoutManager as? LinearLayoutManager
         val itemCount = adapter?.itemCount ?: 0
         if (linearLayoutManager != null && itemCount > 0) {
-            val targetPosition = (targetRatio * (itemCount - 1)).roundToInt()
+            val targetPosition = (
+                (targetRatio * (itemCount - 1)).roundToInt() + thumbDragPositionCorrection
+            ).coerceIn(0, itemCount - 1)
             if (targetPosition != lastThumbAdapterPosition) {
                 linearLayoutManager.scrollToPositionWithOffset(targetPosition, 0)
                 lastThumbAdapterPosition = targetPosition
@@ -233,12 +241,33 @@ class DraggableRecyclerView @JvmOverloads constructor(
         isDraggingThumb = false
         pendingScrollRatio = null
         lastThumbAdapterPosition = RecyclerView.NO_POSITION
+        thumbDragPositionCorrection = 0
         if (scrollFramePosted) {
             removeCallbacks(applyPendingScrollRunnable)
             scrollFramePosted = false
         }
         parent?.requestDisallowInterceptTouchEvent(false)
         scheduleFadeOut()
+    }
+
+    private fun captureThumbDragAnchor() {
+        val linearLayoutManager = layoutManager as? LinearLayoutManager ?: return
+        val itemCount = adapter?.itemCount ?: return
+        if (itemCount <= 0) return
+
+        val scrollRange = computeVerticalScrollRange()
+        val scrollExtent = computeVerticalScrollExtent()
+        val currentRatio = if (scrollRange > scrollExtent) {
+            computeVerticalScrollOffset().toFloat() / (scrollRange - scrollExtent)
+        } else {
+            0f
+        }
+        val estimatedPosition = (currentRatio * (itemCount - 1)).roundToInt()
+        val firstVisiblePosition = linearLayoutManager.findFirstVisibleItemPosition()
+        if (firstVisiblePosition != RecyclerView.NO_POSITION) {
+            thumbDragPositionCorrection = firstVisiblePosition - estimatedPosition
+            lastThumbAdapterPosition = firstVisiblePosition
+        }
     }
 
     private fun computeThumbTop(): Float {

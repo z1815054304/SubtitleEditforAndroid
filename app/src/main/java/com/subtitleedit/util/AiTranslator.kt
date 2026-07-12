@@ -21,6 +21,9 @@ class AiTranslator(
     private val sourceLanguage: String,
     private val targetLanguage: String
 ) {
+    companion object {
+        private const val MAX_LINES_PER_REQUEST = 500
+    }
     private val client = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -52,9 +55,19 @@ class AiTranslator(
                 return@withContext Result.failure(CancellationException("翻译已取消"))
             }
 
-            // 使用批量翻译
-            val translatedTexts = translateBatch(texts)
-            progressCallback?.invoke(texts.size, texts.size)
+            val messages = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", buildSystemPrompt())
+                })
+            }
+            val translatedTexts = mutableListOf<String>()
+            texts.chunked(MAX_LINES_PER_REQUEST).forEachIndexed { batchIndex, batch ->
+                if (isCancelled()) throw CancellationException("翻译已取消")
+                val translatedBatch = translateBatch(batch, messages, batchIndex)
+                translatedTexts.addAll(translatedBatch)
+                progressCallback?.invoke(translatedTexts.size, texts.size)
+            }
 
             Result.success(translatedTexts)
         } catch (e: Exception) {
@@ -66,30 +79,33 @@ class AiTranslator(
      * 批量翻译文本
      * 将所有字幕文本合并成一个大请求，提高效率和节省 Token
      */
-    private fun translateBatch(texts: List<String>): List<String> {
+    private fun translateBatch(
+        texts: List<String>,
+        messages: JSONArray,
+        batchIndex: Int
+    ): List<String> {
         if (texts.isEmpty()) return emptyList()
-        if (texts.size == 1) return listOf(translateSingleText(texts[0]))
 
         // 构建带索引的文本内容，方便后续解析
         val indexedContent = texts.mapIndexed { index, text ->
             "[${index + 1}] ${text}"
         }.joinToString("\n")
 
+        messages.put(JSONObject().apply {
+            put("role", "user")
+            put(
+                "content",
+                if (batchIndex == 0) indexedContent
+                else "以下是同一份字幕的后续内容，请延续前文术语与语气，继续翻译：\n$indexedContent"
+            )
+        })
+
         val jsonBody = JSONObject().apply {
             put("model", model)
-            put("messages", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", buildSystemPrompt(texts.size))
-                })
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", indexedContent)
-                })
-            })
+            put("messages", messages)
             put("stream", false)
             put("temperature", 0.3)
-            put("max_tokens", 4096)
+            put("max_tokens", 8192)
         }
 
         val mediaType = "application/json".toMediaType()
@@ -116,8 +132,15 @@ class AiTranslator(
                 val choice = choices.getJSONObject(0)
                 val message = choice.getJSONObject("message")
                 val content = message.getString("content")
-                // 解析返回的翻译结果
-                parseTranslationResult(content, texts.size)
+                messages.put(JSONObject().apply {
+                    put("role", "assistant")
+                    put("content", content)
+                })
+                val translations = parseTranslationResult(content, texts.size)
+                if (translations.any { it.isBlank() }) {
+                    throw IOException("第 ${batchIndex + 1} 批翻译结果不完整，请重试")
+                }
+                translations
             } else {
                 throw IOException("没有翻译结果")
             }
@@ -127,7 +150,7 @@ class AiTranslator(
     /**
      * 构建系统提示词
      */
-    private fun buildSystemPrompt(count: Int): String {
+    private fun buildSystemPrompt(): String {
         val sourceLangText = if (sourceLanguage == "自动检测" || sourceLanguage.isEmpty()) {
             "自动检测源语言"
         } else {
@@ -137,13 +160,13 @@ class AiTranslator(
         return """
 你是一个专业的字幕翻译助手。$sourceLangText，请将用户提供的字幕文本翻译成$targetLanguage。
 
-用户会提供 $count 条带编号的字幕文本，格式为：[编号] 内容
+用户会提供最多 500 条带编号的字幕文本，格式为：[编号] 内容。若有后续消息，它们属于同一份字幕，必须延续此前上下文。
 
 请按以下要求处理：
 1. 只返回翻译结果，不要添加任何解释或其他内容
 2. 保持原有的编号格式，每条翻译结果占一行
 3. 格式为：[编号] 翻译后的内容
-4. 确保返回 $count 条翻译结果，顺序与输入一致
+4. 确保返回与当前请求数量一致的翻译结果，顺序与输入一致
 
 示例输入：
 [1] Hello

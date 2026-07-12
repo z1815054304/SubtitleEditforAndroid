@@ -18,20 +18,26 @@ import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.subtitleedit.view.DraggableScrollView
+import com.subtitleedit.view.DraggableRecyclerView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import android.media.MediaPlayer
 import com.subtitleedit.adapter.SubtitleAdapter
+import com.subtitleedit.adapter.TranslationPreviewAdapter
+import com.subtitleedit.adapter.TranslationPreviewItem
 import com.subtitleedit.databinding.ActivityEditorBinding
 import com.subtitleedit.util.AiTranslator
 import com.subtitleedit.util.AiProviderConfig
@@ -2079,38 +2085,87 @@ class EditorActivity : AppCompatActivity() {
             return
         }
         
-        // 构建预览内容
-        val previewText = selectedEntries.mapIndexed { index, (entry, _) ->
-            "原文本：${entry.text}\n翻译后：${translatedTexts[index]}\n"
-        }.joinToString("\n")
-        
-        val scrollView = ScrollView(this)
-        scrollView.setPadding(50, 40, 50, 10)
-        scrollView.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-        
-        val textView = TextView(this)
-        textView.text = previewText
-        textView.textSize = 14f
-        textView.setLineSpacing(0f, 1.3f)
-        
-        scrollView.addView(textView)
-        
-        AlertDialog.Builder(this)
+        val previewItems = selectedEntries.mapIndexed { index, (entry, position) ->
+            TranslationPreviewItem(position, entry.text, translatedTexts[index])
+        }
+        val recyclerView = DraggableRecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@EditorActivity)
+            adapter = TranslationPreviewAdapter(previewItems) { item, onUpdated ->
+                showTranslationTextEditDialog(item, onUpdated)
+            }
+            setPadding(16, 8, 16, 8)
+            clipToPadding = false
+            descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+            post { showDragThumb() }
+        }
+        val dialog = AlertDialog.Builder(this)
             .setTitle("翻译结果预览")
-            .setView(scrollView as android.view.View)
+            .setView(recyclerView)
             .setPositiveButton("应用") { _, _ ->
-                // 应用翻译结果
-                selectedEntries.forEachIndexed { index, (entry, _) ->
-                    entry.text = translatedTexts[index]
+                val appliedItems = previewItems.filter { it.apply }
+                appliedItems.forEach { item ->
+                    subtitleEntries.getOrNull(item.entryPosition)?.text = item.translatedText
                 }
-                notifyEntriesChanged(selectedEntries.map { it.second }, includeNeighbors = false)
-                showShortToast("翻译已应用")
+                if (appliedItems.isNotEmpty()) {
+                    notifyEntriesChanged(appliedItems.map { it.entryPosition }, includeNeighbors = false)
+                }
+                showShortToast("已应用 ${appliedItems.size} 条翻译")
+            }
+            .setNeutralButton("保存草稿") { _, _ -> saveTranslationDraft(previewItems) }
+            .setNegativeButton("取消", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.apply {
+                setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                setLayout(
+                (resources.displayMetrics.widthPixels * 0.96f).toInt(),
+                (resources.displayMetrics.heightPixels * 0.82f).toInt()
+                )
+            }
+        }
+        dialog.show()
+    }
+
+    private fun showTranslationTextEditDialog(
+        previewItem: TranslationPreviewItem,
+        onUpdated: () -> Unit
+    ) {
+        val editText = EditText(this).apply {
+            setText(previewItem.translatedText)
+            setSelection(text.length)
+            setLines(3)
+            inputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE
+            importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("编辑翻译文本")
+            .setView(editText)
+            .setPositiveButton("确定") { _, _ ->
+                previewItem.translatedText = editText.text?.toString().orEmpty()
+                onUpdated()
             }
             .setNegativeButton("取消", null)
-            .show()
+            .create()
+        dialog.setOnShowListener {
+            editText.requestFocus()
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+            editText.post {
+                val inputMethodManager = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                inputMethodManager.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun saveTranslationDraft(previewItems: List<TranslationPreviewItem>) {
+        val draftEntries = subtitleEntries.map { it.copy() }.toMutableList()
+        previewItems.filter { it.apply }.forEach { item ->
+            draftEntries.getOrNull(item.entryPosition)?.text = item.translatedText
+        }
+        val fileName = currentFile?.name ?: "未命名"
+        val draftContent = serializeEntriesForFormat(currentFormat, draftEntries)
+        val savedFileName = DraftManager.saveDraft(this, fileName, draftContent)
+        showShortToast("翻译草稿已保存：$savedFileName")
     }
 
     private fun finishTranslation(progressDialog: AlertDialog) {
@@ -2175,11 +2230,18 @@ class EditorActivity : AppCompatActivity() {
     }
 
     private fun serializeEntriesForFormat(format: SubtitleParser.SubtitleFormat): String {
+        return serializeEntriesForFormat(format, subtitleEntries)
+    }
+
+    private fun serializeEntriesForFormat(
+        format: SubtitleParser.SubtitleFormat,
+        entries: List<SubtitleEntry>
+    ): String {
         return when (format) {
-            SubtitleParser.SubtitleFormat.SRT -> SubtitleParser.toSRT(subtitleEntries)
-            SubtitleParser.SubtitleFormat.LRC -> SubtitleParser.toLRC(subtitleEntries)
-            SubtitleParser.SubtitleFormat.TXT -> SubtitleParser.toTXT(subtitleEntries)
-            else -> SubtitleParser.toSRT(subtitleEntries)
+            SubtitleParser.SubtitleFormat.SRT -> SubtitleParser.toSRT(entries)
+            SubtitleParser.SubtitleFormat.LRC -> SubtitleParser.toLRC(entries)
+            SubtitleParser.SubtitleFormat.TXT -> SubtitleParser.toTXT(entries)
+            else -> SubtitleParser.toSRT(entries)
         }
     }
 
