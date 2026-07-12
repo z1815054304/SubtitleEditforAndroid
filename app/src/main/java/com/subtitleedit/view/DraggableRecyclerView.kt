@@ -6,7 +6,9 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlin.math.roundToInt
 
 /**
  * 带可拖拽滚动条的 RecyclerView。
@@ -51,6 +53,15 @@ class DraggableRecyclerView @JvmOverloads constructor(
 
     private var isDraggingThumb = false
     private var dragOffsetY     = 0f
+    private var pendingScrollRatio: Float? = null
+    private var scrollFramePosted = false
+    private var lastThumbAdapterPosition = RecyclerView.NO_POSITION
+
+    // 高频 MOVE 事件只保留最后一个目标位置，每帧最多触发一次 RecyclerView 布局。
+    private val applyPendingScrollRunnable = Runnable {
+        scrollFramePosted = false
+        applyPendingThumbScroll()
+    }
 
     // 淡出动画
     private var fadeStartTime  = 0L
@@ -76,7 +87,8 @@ class DraggableRecyclerView @JvmOverloads constructor(
     // ──────────────────────────────────────────────
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN && isInThumbTouchZone(ev.x)) {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN &&
+            isInThumbTouchZone(ev.x) && canDragThumb()) {
             stopScroll()   // RecyclerView 公开方法，直接调用
             return true
         }
@@ -87,10 +99,10 @@ class DraggableRecyclerView @JvmOverloads constructor(
         when (ev.actionMasked) {
 
             MotionEvent.ACTION_DOWN -> {
-                if (isInThumbTouchZone(ev.x)) {
+                if (isInThumbTouchZone(ev.x) && canDragThumb()) {
                     stopScroll()
                     isDraggingThumb = true
-                    dragOffsetY = ev.y - computeThumbTop()
+                    dragOffsetY = ev.y - paddingTop - computeThumbTop()
                     parent?.requestDisallowInterceptTouchEvent(true)
                     showThumb()
                     return true
@@ -99,17 +111,20 @@ class DraggableRecyclerView @JvmOverloads constructor(
 
             MotionEvent.ACTION_MOVE -> {
                 if (isDraggingThumb) {
+                    // 数据刷新后列表可能已经不再可滚动，立即结束旧滑块的拖拽状态。
+                    if (!canDragThumb()) {
+                        finishThumbDrag()
+                        return true
+                    }
+
                     val thumbHeight    = computeThumbHeight()
                     val trackHeight    = (height - paddingTop - paddingBottom).toFloat()
-                    val maxThumbTop    = trackHeight - thumbHeight
+                    val maxThumbTop    = (trackHeight - thumbHeight).coerceAtLeast(0f)
                     val targetThumbTop = (ev.y - paddingTop - dragOffsetY).coerceIn(0f, maxThumbTop)
                     val maxScroll      = computeVerticalScrollRange() - computeVerticalScrollExtent()
                     if (maxThumbTop > 0f && maxScroll > 0) {
                         val ratio     = targetThumbTop / maxThumbTop
-                        val targetPos = (ratio * maxScroll).toInt()
-                        // RecyclerView 没有 scrollTo，用 scrollBy 相对移动
-                        val delta = targetPos - computeVerticalScrollOffset()
-                        scrollBy(0, delta)
+                        enqueueThumbScroll(ratio)
                     }
                     showThumb()
                     return true
@@ -118,9 +133,8 @@ class DraggableRecyclerView @JvmOverloads constructor(
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isDraggingThumb) {
-                    isDraggingThumb = false
-                    parent?.requestDisallowInterceptTouchEvent(false)
-                    scheduleFadeOut()
+                    applyPendingThumbScroll()
+                    finishThumbDrag()
                     return true
                 }
             }
@@ -140,6 +154,7 @@ class DraggableRecyclerView @JvmOverloads constructor(
     private fun showThumb() {
         removeCallbacks(startFadeRunnable)
         removeCallbacks(fadeRunnable)
+        if (isDraggingThumb && thumbAlpha == 220) return
         thumbAlpha = 220
         if (!isDraggingThumb) {
             postDelayed(startFadeRunnable, FADE_DELAY_MS)
@@ -169,7 +184,7 @@ class DraggableRecyclerView @JvmOverloads constructor(
         // 贴 View 真正右边缘，忽略 padding，保证滚动条在屏幕最右侧
         val left  = width - thumbMarginPx - thumbWidthPx
         val right = left + thumbWidthPx
-        val top    = thumbTop
+        val top    = paddingTop + thumbTop
         val bottom = top + thumbHeight
 
         thumbRect.set(left, top, right, bottom)
@@ -183,11 +198,54 @@ class DraggableRecyclerView @JvmOverloads constructor(
     private fun isInThumbTouchZone(x: Float) =
         x >= width - touchZonePx
 
+    private fun canDragThumb(): Boolean =
+        computeVerticalScrollRange() > computeVerticalScrollExtent()
+
+    private fun enqueueThumbScroll(targetRatio: Float) {
+        pendingScrollRatio = targetRatio
+        if (!scrollFramePosted) {
+            scrollFramePosted = true
+            postOnAnimation(applyPendingScrollRunnable)
+        }
+    }
+
+    private fun applyPendingThumbScroll() {
+        val targetRatio = pendingScrollRatio ?: return
+        pendingScrollRatio = null
+        if (!isDraggingThumb || !canDragThumb()) return
+
+        val linearLayoutManager = layoutManager as? LinearLayoutManager
+        val itemCount = adapter?.itemCount ?: 0
+        if (linearLayoutManager != null && itemCount > 0) {
+            val targetPosition = (targetRatio * (itemCount - 1)).roundToInt()
+            if (targetPosition != lastThumbAdapterPosition) {
+                linearLayoutManager.scrollToPositionWithOffset(targetPosition, 0)
+                lastThumbAdapterPosition = targetPosition
+            }
+        } else {
+            val maxScroll = computeVerticalScrollRange() - computeVerticalScrollExtent()
+            val delta = (targetRatio * maxScroll).toInt() - computeVerticalScrollOffset()
+            if (delta != 0) scrollBy(0, delta)
+        }
+    }
+
+    private fun finishThumbDrag() {
+        isDraggingThumb = false
+        pendingScrollRatio = null
+        lastThumbAdapterPosition = RecyclerView.NO_POSITION
+        if (scrollFramePosted) {
+            removeCallbacks(applyPendingScrollRunnable)
+            scrollFramePosted = false
+        }
+        parent?.requestDisallowInterceptTouchEvent(false)
+        scheduleFadeOut()
+    }
+
     private fun computeThumbTop(): Float {
         val scrollRange  = computeVerticalScrollRange().toFloat()
         val scrollExtent = computeVerticalScrollExtent().toFloat()
         val scrollOffset = computeVerticalScrollOffset().toFloat()
-        val trackHeight  = height.toFloat()
+        val trackHeight  = (height - paddingTop - paddingBottom).toFloat().coerceAtLeast(0f)
         val thumbHeight  = computeThumbHeight()
         val maxThumbTop  = trackHeight - thumbHeight
         return if (scrollRange > scrollExtent)
@@ -198,9 +256,11 @@ class DraggableRecyclerView @JvmOverloads constructor(
     private fun computeThumbHeight(): Float {
         val scrollRange  = computeVerticalScrollRange().toFloat()
         val scrollExtent = computeVerticalScrollExtent().toFloat()
-        val trackHeight  = height.toFloat()
+        val trackHeight  = (height - paddingTop - paddingBottom).toFloat().coerceAtLeast(0f)
         return if (scrollRange > 0)
-            (scrollExtent / scrollRange * trackHeight).coerceAtLeast(thumbMinHeightPx)
+            (scrollExtent / scrollRange * trackHeight)
+                .coerceAtLeast(thumbMinHeightPx.coerceAtMost(trackHeight))
+                .coerceAtMost(trackHeight)
         else trackHeight
     }
 }

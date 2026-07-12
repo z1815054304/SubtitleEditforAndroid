@@ -391,6 +391,8 @@ class EditorActivity : AppCompatActivity() {
         binding.rvSubtitles.apply {
             layoutManager = LinearLayoutManager(this@EditorActivity)
             adapter = subtitleAdapter
+            // 滑块大跨度定位时复用更多已绑定行，减少文本测量和 ViewHolder 重绑。
+            setItemViewCacheSize(12)
         }
     }
     

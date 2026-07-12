@@ -58,8 +58,8 @@ class WaveformTimelineView @JvmOverloads constructor(
         /** 高精度采样数上限（聚焦 chunk）—— 提高到 30000，支持最大缩放时保持 4x 超采样 */
         private const val HIGH_RES_SAMPLES = 30_000
 
-        /** 最大放大：屏幕显示 5 秒 */
-        private const val MIN_VISIBLE_MS = 5_000L
+        /** 最大放大：屏幕显示 2 秒 */
+        private const val MIN_VISIBLE_MS = 2_000L
 
         /** 最大缩小：屏幕显示 10 分钟 */
         private const val MAX_VISIBLE_MS = 600_000L
@@ -1249,7 +1249,7 @@ class WaveformTimelineView @JvmOverloads constructor(
 
     /** 放大振幅（每次 ×1.25） */
     fun zoomInAmplitude() {
-        amplitudeScale = (amplitudeScale * 1.25f).coerceAtMost(4.0f)
+        amplitudeScale = (amplitudeScale * 1.25f).coerceAtMost(10.0f)
         invalidateCache()
         invalidate()
     }
