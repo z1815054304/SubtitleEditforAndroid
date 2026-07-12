@@ -125,8 +125,8 @@
                         <ImageView
                             android:layout_width="48dp"
                             android:layout_height="48dp"
-                            android:src="@drawable/ic_mic"
-                            android:padding="8dp"
+                            android:src="@drawable/ic_speech_to_subtitle"
+                            android:padding="5dp"
                             android:background="@drawable/bg_icon_circle"
                             android:contentDescription="语音转字幕" />
 
@@ -190,8 +190,8 @@
                         <ImageView
                             android:layout_width="48dp"
                             android:layout_height="48dp"
-                            android:src="@drawable/ic_convert"
-                            android:padding="8dp"
+                            android:src="@drawable/ic_media_convert"
+                            android:padding="3dp"
                             android:background="@drawable/bg_icon_circle"
                             android:contentDescription="音视频转换" />
 
@@ -255,7 +255,7 @@
                         <ImageView
                             android:layout_width="48dp"
                             android:layout_height="48dp"
-                            android:src="@drawable/ic_mic"
+                            android:src="@drawable/ic_auto_timestamp"
                             android:padding="8dp"
                             android:background="@drawable/bg_icon_circle"
                             android:contentDescription="自动打轴" />
