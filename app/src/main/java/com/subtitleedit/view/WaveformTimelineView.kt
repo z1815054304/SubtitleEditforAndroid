@@ -171,6 +171,9 @@ class WaveformTimelineView @JvmOverloads constructor(
     private var timestampStartMs = 0L
     private var timestampAnchorX = 0f
     private var lastTouchXForTimestamp = 0f
+    /** 虚拟缓冲区等于当前视口时长，使不同缩放下都可拖出完整一屏。 */
+    private fun timestampVirtualPaddingMs(): Long =
+        visibleDurationMs.coerceIn(250L, MAX_VISIBLE_MS)
 
     // ==================== 画笔（全部预创建，避免 onDraw 中分配对象）====================
 
@@ -348,7 +351,8 @@ class WaveformTimelineView @JvmOverloads constructor(
 
     private fun xToTime(x: Float): Long {
         if (width <= 0) return 0L
-        return (visibleStartMs + x / width * visibleDurationMs).toLong().coerceAtLeast(0L)
+        return (visibleStartMs + x / width * visibleDurationMs).toLong()
+            .coerceIn(0L, durationMs)
     }
 
     // ==================== Chunk 工具 ====================
@@ -879,7 +883,7 @@ class WaveformTimelineView @JvmOverloads constructor(
     private fun isInSubtitleArea(y: Float) = y >= subtitleTrackY() && y <= height.toFloat()
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        // 打轴模式：只处理波形图滚动，播放头锚点固定在屏幕上
+        // 打轴模式：允许视口进入音频两端的虚拟缓冲区，便于从边界向外打轴。
         if (isTimestampingMode) {
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -888,7 +892,11 @@ class WaveformTimelineView @JvmOverloads constructor(
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - lastTouchXForTimestamp
                     val dMs = (-dx / width * visibleDurationMs).toLong()
-                    visibleStartMs = (visibleStartMs + dMs).coerceIn(0L, maxOf(0L, durationMs - visibleDurationMs))
+                    val virtualPaddingMs = timestampVirtualPaddingMs()
+                    visibleStartMs = (visibleStartMs + dMs).coerceIn(
+                        -virtualPaddingMs,
+                        maxOf(0L, durationMs - visibleDurationMs) + virtualPaddingMs
+                    )
                     lastTouchXForTimestamp = event.x
                     invalidate()
                 }
@@ -1204,6 +1212,13 @@ class WaveformTimelineView @JvmOverloads constructor(
     fun stopTimestamping(): Long {
         isTimestampingMode = false
         val endMs = xToTime(timestampAnchorX)
+        // 虚拟缓冲区仅用于打轴手势，退出后恢复普通视口边界。
+        val normalMaxStart = maxOf(0L, durationMs - visibleDurationMs)
+        if (visibleStartMs !in 0L..normalMaxStart) {
+            visibleStartMs = visibleStartMs.coerceIn(0L, normalMaxStart)
+            invalidateCache()
+            requestVisibleChunks()
+        }
         invalidate()
         return endMs
     }
