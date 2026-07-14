@@ -46,24 +46,45 @@
 
     </LinearLayout>
 
-    <ScrollView
-        android:id="@+id/logScrollView"
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/logDisplayMode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="4dp"
+        app:singleSelection="true"
+        app:selectionRequired="true">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSimpleLog"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:checked="true"
+            android:text="简单" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDetailedLog"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="详细" />
+
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+    <Spinner
+        android:id="@+id/spinnerLogPageFilter"
+        android:layout_width="wrap_content"
+        android:layout_height="40dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="4dp" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/logSectionList"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:fillViewport="true">
-
-        <TextView
-            android:id="@+id/tvLogContent"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:lineSpacingExtra="2dp"
-            android:padding="16dp"
-            android:textColor="?attr/colorOnSurface"
-            android:textIsSelectable="true"
-            android:textSize="12sp" />
-
-    </ScrollView>
+        android:clipToPadding="false"
+        android:paddingBottom="8dp" />
 
 </LinearLayout>

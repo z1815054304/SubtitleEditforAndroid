@@ -8,6 +8,7 @@ import android.os.Process as AndroidProcess
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
+import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.text.SimpleDateFormat
@@ -20,6 +21,11 @@ object RuntimeLogManager {
     private const val KEY_CLEAR_TIME = "clear_time"
     private const val RETENTION_MS = 24L * 60L * 60L * 1000L
     private const val MAX_LOGCAT_CRASH_LINES = 400
+    private const val MAX_SIMPLE_DISPLAY_LINES = 1_000
+    private const val MAX_DETAILED_DISPLAY_LINES = 1_600
+    private const val MAX_SIMPLE_DISPLAY_CHARS = 96_000
+    private const val MAX_DETAILED_DISPLAY_CHARS = 180_000
+    private const val MAX_DISPLAY_LINE_CHARS = 1_500
 
     private val fileTimeFormat = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
     private val displayTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
@@ -35,10 +41,16 @@ object RuntimeLogManager {
 
     data class Snapshot(
         val content: String,
-        val file: File,
         val capturedAt: Long,
-        val packageName: String
+        val packageName: String,
+        val matchedLineCount: Int,
+        val isPreviewTruncated: Boolean
     )
+
+    enum class DisplayMode {
+        SIMPLE,
+        DETAILED
+    }
 
     fun install(application: Application) {
         synchronized(lock) {
@@ -58,7 +70,7 @@ object RuntimeLogManager {
         }
     }
 
-    fun captureLastDay(context: Context): Snapshot {
+    fun captureLastDay(context: Context, mode: DisplayMode): Snapshot {
         ensureInstalled(context)
         val now = System.currentTimeMillis()
         val appContext = context.applicationContext
@@ -67,21 +79,51 @@ object RuntimeLogManager {
         flush()
 
         val packageName = appContext.packageName
-        val persisted = readPersistedLogs(appContext, since)
+        val collector = PreviewCollector(
+            maxLines = if (mode == DisplayMode.SIMPLE) MAX_SIMPLE_DISPLAY_LINES else MAX_DETAILED_DISPLAY_LINES,
+            maxChars = if (mode == DisplayMode.SIMPLE) MAX_SIMPLE_DISPLAY_CHARS else MAX_DETAILED_DISPLAY_CHARS
+        )
+        forEachPersistedLogLine(appContext, since) { line ->
+            if (shouldShowLine(line, mode)) collector.add(line)
+        }
         val content = buildString {
             appendLine("SubtitleEdit for Android 运行日志")
             appendLine("包名：$packageName")
             appendLine("采集时间：${displayTimeFormat.format(Date(now))}")
             appendLine("有效范围：本应用最近 24 小时，且不早于上次清空时间")
+            appendLine("显示模式：${if (mode == DisplayMode.SIMPLE) "简单（已隐藏常规系统与调试输出）" else "详细"}")
             appendLine("来源：应用启动后实时文件日志、页面生命周期、崩溃兜底记录、后台 logcat")
             appendLine()
-            append(if (persisted.isBlank()) "暂无可读取的日志。" else persisted)
+            append(if (collector.isEmpty()) "暂无可读取的日志。" else collector.content())
+            if (collector.isTruncated) {
+                appendLine()
+                appendLine("[预览已限制为最近部分日志；导出可获得当前模式的完整内容]")
+            }
             appendLine()
         }
+        return Snapshot(content, now, packageName, collector.matchedLineCount, collector.isTruncated)
+    }
 
-        val file = File(logDir(appContext), "runtime-snapshot-${fileTimeFormat.format(Date(now))}.txt")
-        file.writeText(content, Charsets.UTF_8)
-        return Snapshot(content, file, now, packageName)
+    /** 将当前模式的完整日志流式写出，避免导出时在内存中拼接大字符串。 */
+    fun exportLastDay(context: Context, mode: DisplayMode, output: OutputStream) {
+        ensureInstalled(context)
+        val now = System.currentTimeMillis()
+        val appContext = context.applicationContext
+        val since = maxOf(now - RETENTION_MS, getClearTime(appContext))
+        pruneOldLogs(context, now)
+        flush()
+
+        output.bufferedWriter(Charsets.UTF_8).use { writer ->
+            writer.appendLine("SubtitleEdit for Android 运行日志")
+            writer.appendLine("包名：${appContext.packageName}")
+            writer.appendLine("采集时间：${displayTimeFormat.format(Date(now))}")
+            writer.appendLine("有效范围：本应用最近 24 小时，且不早于上次清空时间")
+            writer.appendLine("导出模式：${if (mode == DisplayMode.SIMPLE) "简单（已隐藏常规系统与调试输出）" else "详细"}")
+            writer.appendLine()
+            forEachPersistedLogLine(appContext, since) { line ->
+                if (shouldShowLine(line, mode)) writer.appendLine(line)
+            }
+        }
     }
 
     fun exportFileName(now: Long = System.currentTimeMillis()): String {
@@ -173,7 +215,7 @@ object RuntimeLogManager {
         }
     }
 
-    private fun readPersistedLogs(context: Context, since: Long): String {
+    private fun forEachPersistedLogLine(context: Context, since: Long, consumer: (String) -> Unit) {
         val activeFile = activeLogFile?.takeIf { it.exists() }
         val historicalFiles = logDir(context).listFiles()
             ?.filter { file ->
@@ -185,14 +227,62 @@ object RuntimeLogManager {
             ?.sortedBy { it.lastModified() }
             .orEmpty()
         val files = if (activeFile != null) historicalFiles + activeFile else historicalFiles
-        return files.distinct()
-            .joinToString("\n") { file ->
-                runCatching {
-                    "===== ${file.name} =====\n${file.readText(Charsets.UTF_8).trim()}"
-                }.getOrElse {
-                    "===== ${file.name} =====\n读取失败：${it.message}"
+        files.distinct().forEach { file ->
+            consumer("===== ${file.name} =====")
+            runCatching {
+                file.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach(consumer)
                 }
+            }.onFailure {
+                consumer("读取失败：${it.message}")
             }
+        }
+    }
+
+    /** 简单模式只隐藏显示，原始日志仍完整保存在文件中。 */
+    private fun shouldShowLine(line: String, mode: DisplayMode): Boolean {
+        if (mode == DisplayMode.DETAILED) return true
+        if (line.startsWith("=====")) return true
+        if (!line.contains(" LOGCAT/logcat:")) return true
+
+        val logcat = line.substringAfter(" LOGCAT/logcat:")
+        return logcat.contains(" E/") ||
+            logcat.contains(" F/") ||
+            logcat.contains("AndroidRuntime") ||
+            logcat.contains("FATAL EXCEPTION") ||
+            logcat.contains("OutOfMemoryError") ||
+            logcat.contains("ANR")
+    }
+
+    private class PreviewCollector(
+        private val maxLines: Int,
+        private val maxChars: Int
+    ) {
+        private val lines = ArrayDeque<String>()
+        private var charCount = 0
+        var matchedLineCount = 0
+            private set
+        var isTruncated = false
+            private set
+
+        fun add(rawLine: String) {
+            matchedLineCount++
+            val line = if (rawLine.length > MAX_DISPLAY_LINE_CHARS) {
+                rawLine.take(MAX_DISPLAY_LINE_CHARS) + " [单行已截断]"
+            } else {
+                rawLine
+            }
+            lines.addLast(line)
+            charCount += line.length + 1
+            while (lines.size > maxLines || charCount > maxChars) {
+                charCount -= lines.removeFirst().length + 1
+                isTruncated = true
+            }
+        }
+
+        fun isEmpty(): Boolean = lines.isEmpty()
+
+        fun content(): String = lines.joinToString(separator = "\n")
     }
 
     private fun createLifecycleCallbacks(): Application.ActivityLifecycleCallbacks {
