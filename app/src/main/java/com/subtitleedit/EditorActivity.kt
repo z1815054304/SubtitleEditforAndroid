@@ -2718,7 +2718,9 @@ class EditorActivity : AppCompatActivity() {
             if (indices.isNotEmpty()) {
                 val firstSelectedIndex = indices.first()
                 if (firstSelectedIndex >= 0 && firstSelectedIndex < subtitleEntries.size) {
-                    binding.rvSubtitles.scrollToPosition(firstSelectedIndex)
+                    // 波形图选中字幕时始终将对应行定位到列表顶部，避免受当前滚动方向影响。
+                    (binding.rvSubtitles.layoutManager as? LinearLayoutManager)
+                        ?.scrollToPositionWithOffset(firstSelectedIndex, 0)
                     loopSubtitleEntry = subtitleEntries[firstSelectedIndex]
 
                     // 若循环模式开启，且播放头不在字幕区间内，则跳到字幕起始时间
