@@ -3,6 +3,7 @@ package com.subtitleedit.util
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.k2fsa.sherpa.onnx.*
 import java.io.File
@@ -32,6 +33,8 @@ class WhisperRecognizer(
 
     private var recognizer: OfflineRecognizer? = null
     private var vad: Vad? = null
+    // 原生识别器只接受文件路径。对 SAF URI 保持描述符存活，避免复制大型模型文件。
+    private val modelFileDescriptors = mutableListOf<ParcelFileDescriptor>()
 
     /**
      * 字幕片段
@@ -62,13 +65,12 @@ class WhisperRecognizer(
      */
     private fun initRecognizer(): Result<Unit> {
         return try {
-            // 将 URI 转换为本地文件路径
-            val encoderFile = copyUriToCache(
-                Uri.parse(encoderPath),
+            val encoderFile = resolveModelPath(
+                encoderPath,
                 if (isSenseVoice()) "sensevoice.onnx" else "encoder.onnx"
             )
-            val decoderFile = if (isSenseVoice()) null else copyUriToCache(Uri.parse(decoderPath), "decoder.onnx")
-            val tokensFile = copyUriToCache(Uri.parse(tokensPath), "tokens.txt")
+            val decoderFile = if (isSenseVoice()) null else resolveModelPath(decoderPath, "decoder.onnx")
+            val tokensFile = resolveModelPath(tokensPath, "tokens.txt")
 
             if (encoderFile == null) {
                 return Result.failure(Exception("无法读取 encoder 文件"))
@@ -81,20 +83,20 @@ class WhisperRecognizer(
             }
 
             Log.d(TAG, "模型文件准备完成:")
-            Log.d(TAG, "  ${if (isSenseVoice()) "model" else "encoder"}: ${encoderFile.absolutePath}")
-            decoderFile?.let { Log.d(TAG, "  decoder: ${it.absolutePath}") }
-            Log.d(TAG, "  tokens: ${tokensFile.absolutePath}")
+            Log.d(TAG, "  ${if (isSenseVoice()) "model" else "encoder"}: $encoderFile")
+            decoderFile?.let { Log.d(TAG, "  decoder: $it") }
+            Log.d(TAG, "  tokens: $tokensFile")
 
             if (useVad) {
                 // 初始化 VAD（如果提供了模型路径，使用外部模型；否则使用内置模型）
                 if (vadModelPath.isNotEmpty()) {
-                    val vadFile = copyUriToCache(Uri.parse(vadModelPath), "vad.onnx")
+                    val vadFile = resolveModelPath(vadModelPath, "vad.onnx")
                     if (vadFile != null) {
-                        Log.d(TAG, "  vad: ${vadFile.absolutePath}")
+                        Log.d(TAG, "  vad: $vadFile")
                         val settingsManager = SettingsManager.getInstance(context)
                         val vadConfig = VadModelConfig(
                             sileroVadModelConfig = SileroVadModelConfig(
-                                model = vadFile.absolutePath,
+                                model = vadFile,
                                 threshold = settingsManager.getVadThreshold(),
                                 minSilenceDuration = settingsManager.getVadMinSilenceDuration(),
                                 minSpeechDuration = settingsManager.getVadMinSpeechDuration(),
@@ -146,26 +148,26 @@ class WhisperRecognizer(
                 Log.d(TAG, "SenseVoice language=$senseVoiceLanguage (selected=$language)")
                 OfflineModelConfig(
                     senseVoice = OfflineSenseVoiceModelConfig(
-                        model = encoderFile.absolutePath,
+                        model = encoderFile,
                         language = senseVoiceLanguage,
                         useInverseTextNormalization = true
                     ),
-                    tokens = tokensFile.absolutePath,
+                    tokens = tokensFile,
                     numThreads = 4,
                     debug = true,
                     provider = "cpu"
                 )
             } else OfflineModelConfig(
                 whisper = OfflineWhisperModelConfig(
-                    encoder = encoderFile.absolutePath,
-                    decoder = decoderFile!!.absolutePath,
+                    encoder = encoderFile,
+                    decoder = decoderFile!!,
                     language = if (language == "自动检测") "" else mapLanguage(language),
                     task = "transcribe",
                     tailPaddings = 1000,
                     enableTokenTimestamps = true,
                     enableSegmentTimestamps = false
                 ),
-                tokens = tokensFile.absolutePath,
+                tokens = tokensFile,
                 numThreads = settingsManager().getSpeechWhisperThreads(),
                 debug = true,
                 provider = "cpu"
@@ -197,8 +199,32 @@ class WhisperRecognizer(
     }
 
     /**
-     * 复制 URI 到缓存目录
+     * 优先将 URI 作为 Linux 文件描述符路径交给原生引擎，避免复制模型。
+     * 个别内容提供方不支持文件描述符时，才退回到原有缓存方式。
      */
+    private fun resolveModelPath(uriString: String, fileName: String): String? {
+        val uri = Uri.parse(uriString)
+        if (uri.scheme.isNullOrEmpty() || uri.scheme == "file") {
+            val file = File(uri.path ?: uriString)
+            return file.takeIf { it.exists() && it.isFile }?.absolutePath
+        }
+
+        try {
+            val descriptor = contentResolver.openFileDescriptor(uri, "r")
+            if (descriptor != null) {
+                modelFileDescriptors.add(descriptor)
+                val directPath = "/proc/self/fd/${descriptor.fd}"
+                Log.d(TAG, "直接使用模型文件描述符: $fileName")
+                return directPath
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "无法直接打开模型 $fileName，将使用缓存", e)
+        }
+
+        return copyUriToCache(uri, fileName)?.absolutePath
+    }
+
+    /** 仅用于不支持文件描述符的内容提供方。 */
     private fun copyUriToCache(uri: Uri, fileName: String): File? {
         return try {
             val cacheFile = File(context.cacheDir, fileName)
@@ -508,6 +534,51 @@ class WhisperRecognizer(
         return segments
     }
 
+    /**
+     * 按既有字幕时间范围识别音频。每个范围对应一条返回文本，适用于编辑时补录字幕。
+     */
+    fun recognizeRanges(
+        audioFile: File,
+        ranges: List<LongRange>,
+        progressCallback: (current: Int, total: Int) -> Unit,
+        isCancelled: () -> Boolean = { false }
+    ): Result<List<String>> {
+        return try {
+            val initResult = initRecognizer()
+            if (initResult.isFailure) return Result.failure(initResult.exceptionOrNull()!!)
+
+            val texts = mutableListOf<String>()
+            Pcm16WavReader(audioFile).use { reader ->
+                ranges.forEachIndexed { index, range ->
+                    if (isCancelled()) return Result.failure(Exception("用户取消"))
+
+                    progressCallback(index + 1, ranges.size)
+                    val startMs = range.first.coerceAtLeast(0L)
+                    val endMs = range.last.coerceAtLeast(startMs)
+                    val startSample = (startMs * SAMPLE_RATE / 1000L)
+                        .coerceAtMost(reader.totalSamples)
+                    val endSample = (endMs * SAMPLE_RATE / 1000L)
+                        .coerceAtMost(reader.totalSamples)
+                    val sampleCount = (endSample - startSample).toInt()
+                    val text = if (sampleCount > 0) {
+                        recognizeSegment(reader.readRange(startSample, sampleCount), startMs)
+                            .joinToString(separator = "") { it.text }
+                            .trim()
+                    } else {
+                        ""
+                    }
+                    texts.add(text)
+                }
+            }
+            Result.success(texts)
+        } catch (e: Exception) {
+            Log.e(TAG, "按时间范围识别失败", e)
+            Result.failure(e)
+        } finally {
+            release()
+        }
+    }
+
     private fun buildSpeechHotwords(): String {
         val settings = settingsManager()
         if (!settings.isSpeechHotwordsEnabled()) return ""
@@ -569,6 +640,14 @@ class WhisperRecognizer(
             recognizer = null
             vad?.release()
             vad = null
+            modelFileDescriptors.forEach { descriptor ->
+                try {
+                    descriptor.close()
+                } catch (e: Exception) {
+                    Log.w(TAG, "关闭模型文件描述符失败", e)
+                }
+            }
+            modelFileDescriptors.clear()
             Log.d(TAG, "识别器资源已释放")
         } catch (e: Exception) {
             Log.e(TAG, "释放资源失败", e)

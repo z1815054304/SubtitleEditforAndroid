@@ -49,6 +49,7 @@ import com.subtitleedit.util.SearchReplaceEngine
 import com.subtitleedit.util.SearchReplaceOps
 import com.subtitleedit.util.SubtitlePasteOps
 import com.subtitleedit.util.SettingsManager
+import com.subtitleedit.util.WhisperRecognizer
 import com.subtitleedit.util.SubtitleEntryOps
 import com.subtitleedit.model.SubtitleEntry
 import com.subtitleedit.util.SubtitleParser
@@ -63,6 +64,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.subtitleedit.audio.FfmpegWaveformChunkLoader
+import com.arthenica.ffmpegkit.FFmpegKit
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 
@@ -118,6 +120,10 @@ class EditorActivity : AppCompatActivity() {
     private var translateJob: Job? = null
     private var isTranslating = false
     private var translateCancelled = false
+
+    // 快速转录相关
+    private var transcribeJob: Job? = null
+    private var transcribeCancelled = false
     
     // 搜索相关
     private val searchEngine = SearchReplaceEngine()
@@ -2128,7 +2134,8 @@ class EditorActivity : AppCompatActivity() {
 
     private fun showTranslationTextEditDialog(
         previewItem: TranslationPreviewItem,
-        onUpdated: () -> Unit
+        onUpdated: () -> Unit,
+        title: String = "编辑翻译文本"
     ) {
         val editText = EditText(this).apply {
             setText(previewItem.translatedText)
@@ -2138,7 +2145,7 @@ class EditorActivity : AppCompatActivity() {
             importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
         }
         val dialog = AlertDialog.Builder(this)
-            .setTitle("编辑翻译文本")
+            .setTitle(title)
             .setView(editText)
             .setPositiveButton("确定") { _, _ ->
                 previewItem.translatedText = editText.text?.toString().orEmpty()
@@ -2178,6 +2185,187 @@ class EditorActivity : AppCompatActivity() {
 
     private fun showTranslationError(message: String) {
         com.subtitleedit.util.OverwritingToast.makeText(this, "翻译失败：$message", Toast.LENGTH_LONG).show()
+    }
+
+    /** 对当前选中的字幕行按各自时间范围执行离线语音转录。 */
+    private fun showQuickTranscribe() {
+        if (!ensureListMode()) return
+        if (!isAudioFile || currentFile == null) {
+            showShortToast("仅在打开音频文件时可快速转录")
+            return
+        }
+        val selectedEntries = requireSelectedEntries("请先选择要转录的字幕") ?: return
+        if (selectedEntries.any { it.first.endTime <= it.first.startTime }) {
+            showShortToast("选中的字幕包含无效时间范围")
+            return
+        }
+
+        val settings = SettingsManager.getInstance(this)
+        val modelType = settings.getAsrModelType()
+        val encoderPath: String
+        val decoderPath: String
+        val tokensPath: String
+        if (modelType == SettingsManager.ASR_MODEL_SENSEVOICE) {
+            encoderPath = settings.getSenseVoiceModelPath()
+            decoderPath = ""
+            tokensPath = settings.getSenseVoiceTokensPath()
+        } else {
+            encoderPath = settings.getWhisperEncoderPath()
+            decoderPath = settings.getWhisperDecoderPath()
+            tokensPath = settings.getWhisperTokensPath()
+        }
+        if (encoderPath.isBlank() || tokensPath.isBlank() ||
+            (modelType == SettingsManager.ASR_MODEL_WHISPER && decoderPath.isBlank())
+        ) {
+            showShortToast("请先在语音转字幕配置中设置识别模型")
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("快速转录")
+            .setMessage("将识别选中的 ${selectedEntries.size} 条字幕对应音频，并在预览中确认后应用。")
+            .setPositiveButton("开始转录") { _, _ ->
+                startQuickTranscription(selectedEntries, encoderPath, decoderPath, tokensPath, modelType)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun startQuickTranscription(
+        selectedEntries: List<Pair<SubtitleEntry, Int>>,
+        encoderPath: String,
+        decoderPath: String,
+        tokensPath: String,
+        modelType: String
+    ) {
+        val inputFile = currentFile ?: return
+        val progressDialog = AlertDialog.Builder(this)
+            .setTitle("正在转录")
+            .setMessage("正在准备音频...")
+            .setNegativeButton("取消") { _, _ -> transcribeCancelled = true }
+            .setCancelable(false)
+            .create()
+        progressDialog.show()
+        transcribeCancelled = false
+
+        transcribeJob = lifecycleScope.launch {
+            try {
+                val cachedPcmFile = recognitionPcmCacheFile(inputFile)
+                progressDialog.setMessage(
+                    if (isRecognitionPcmCacheValid(cachedPcmFile)) "正在使用缓存音频..." else "正在准备音频..."
+                )
+                val pcmFile = withContext(Dispatchers.IO) { convertAudioToRecognitionPcm(inputFile) }
+                    ?: throw IllegalStateException("音频转换失败")
+                if (transcribeCancelled) return@launch
+
+                val recognizer = WhisperRecognizer(
+                    encoderPath = encoderPath,
+                    decoderPath = decoderPath,
+                    tokensPath = tokensPath,
+                    useVad = false,
+                    language = "自动检测",
+                    contentResolver = contentResolver,
+                    context = this@EditorActivity,
+                    modelType = modelType
+                )
+                val ranges = selectedEntries.map { it.first.startTime..it.first.endTime }
+                val result = withContext(Dispatchers.IO) {
+                    recognizer.recognizeRanges(
+                        audioFile = pcmFile,
+                        ranges = ranges,
+                        progressCallback = { current, total ->
+                            runOnUiThread {
+                                progressDialog.setMessage("正在转录第 $current/$total 条...")
+                            }
+                        },
+                        isCancelled = { transcribeCancelled }
+                    )
+                }
+                if (transcribeCancelled) return@launch
+
+                progressDialog.dismiss()
+                result.onSuccess { texts -> showTranscriptionResult(selectedEntries, texts) }
+                    .onFailure { showShortToast("转录失败：${it.message ?: "未知错误"}") }
+            } catch (e: Exception) {
+                if (!transcribeCancelled) showShortToast("转录失败：${e.message ?: "未知错误"}")
+            } finally {
+                if (progressDialog.isShowing) progressDialog.dismiss()
+                transcribeJob = null
+            }
+        }
+    }
+
+    /**
+     * 缓存键包含源文件元数据。源文件变化时会自然切换到新的缓存，不会读取旧音频。
+     */
+    private fun recognitionPcmCacheFile(inputFile: File): File {
+        val sourceKey = "${inputFile.absolutePath.hashCode().toUInt().toString(16)}_" +
+            "${inputFile.length()}_${inputFile.lastModified()}"
+        return File(cacheDir, "quick_transcribe_${sourceKey}_16k.wav")
+    }
+
+    private fun isRecognitionPcmCacheValid(file: File): Boolean = file.exists() && file.length() > 44L
+
+    private fun convertAudioToRecognitionPcm(inputFile: File): File? {
+        return try {
+            val outputFile = recognitionPcmCacheFile(inputFile)
+            if (isRecognitionPcmCacheValid(outputFile)) return outputFile
+            if (outputFile.exists()) outputFile.delete()
+            val command = "-y -i \"${inputFile.absolutePath}\" -ar 16000 -ac 1 -c:a pcm_s16le \"${outputFile.absolutePath}\""
+            val session = FFmpegKit.execute(command)
+            outputFile.takeIf { session.returnCode.isValueSuccess && isRecognitionPcmCacheValid(it) }
+        } catch (e: Exception) {
+            android.util.Log.e("EditorActivity", "快速转录音频转换失败", e)
+            null
+        }
+    }
+
+    private fun showTranscriptionResult(
+        selectedEntries: List<Pair<SubtitleEntry, Int>>,
+        transcribedTexts: List<String>
+    ) {
+        if (transcribedTexts.size != selectedEntries.size) {
+            showShortToast("转录结果数量不匹配")
+            return
+        }
+        val previewItems = selectedEntries.mapIndexed { index, (entry, position) ->
+            TranslationPreviewItem(position, entry.text, transcribedTexts[index])
+        }
+        val recyclerView = DraggableRecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@EditorActivity)
+            adapter = TranslationPreviewAdapter(previewItems) { item, onUpdated ->
+                showTranslationTextEditDialog(item, onUpdated, "编辑转录文本")
+            }
+            setPadding(16, 8, 16, 8)
+            clipToPadding = false
+            descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+            post { showDragThumb() }
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("转录结果预览")
+            .setView(recyclerView)
+            .setPositiveButton("应用") { _, _ ->
+                val appliedItems = previewItems.filter { it.apply }
+                appliedItems.forEach { item ->
+                    subtitleEntries.getOrNull(item.entryPosition)?.text = item.translatedText
+                }
+                if (appliedItems.isNotEmpty()) {
+                    notifyEntriesChanged(appliedItems.map { it.entryPosition }, includeNeighbors = false)
+                }
+                showShortToast("已应用 ${appliedItems.size} 条转录")
+            }
+            .setNegativeButton("取消", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.apply {
+                setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                setLayout(
+                    (resources.displayMetrics.widthPixels * 0.96f).toInt(),
+                    (resources.displayMetrics.heightPixels * 0.82f).toInt()
+                )
+            }
+        }
+        dialog.show()
     }
     
     private fun renumberEntries(force: Boolean = false) {
@@ -2415,6 +2603,8 @@ class EditorActivity : AppCompatActivity() {
             translateCancelled = true
             translateJob?.cancel()
         }
+        transcribeCancelled = true
+        transcribeJob?.cancel()
     }
     
     // ==================== 音频播放器相关方法 ====================
@@ -2663,6 +2853,10 @@ class EditorActivity : AppCompatActivity() {
                 insertSubtitleFromTimestamp(timestampStartMs, endMs)
             }
             false
+        }
+
+        binding.btnQuickTranscribe.setOnClickListener {
+            showQuickTranscribe()
         }
     }
 

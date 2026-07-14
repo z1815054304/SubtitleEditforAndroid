@@ -234,6 +234,17 @@
                             android:padding="3dp"
                             android:contentDescription="插入字幕（打轴）" />
 
+                        <!-- 对选中的字幕行按其时间范围进行语音转录 -->
+                        <ImageButton
+                            android:id="@+id/btnQuickTranscribe"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
+                            android:layout_marginStart="4dp"
+                            android:src="@drawable/ic_quick_transcribe"
+                            android:background="@drawable/bg_waveform_btn"
+                            android:padding="3dp"
+                            android:contentDescription="快速转录选中的字幕" />
+
                         <Space
                             android:layout_width="0dp"
                             android:layout_height="1dp"
