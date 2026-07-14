@@ -19,7 +19,8 @@ class AiTranslator(
     private val apiKey: String,
     private val model: String,
     private val sourceLanguage: String,
-    private val targetLanguage: String
+    private val targetLanguage: String,
+    private val customPrompt: String = ""
 ) {
     companion object {
         private const val MAX_LINES_PER_REQUEST = 500
@@ -157,8 +158,13 @@ class AiTranslator(
             "源语言为$sourceLanguage"
         }
         
+        val additionalInstructions = customPrompt.trim().takeIf { it.isNotEmpty() }?.let {
+            "\n额外翻译要求：\n$it\n"
+        }.orEmpty()
+
         return """
 你是一个专业的字幕翻译助手。$sourceLangText，请将用户提供的字幕文本翻译成$targetLanguage。
+$additionalInstructions
 
 用户会提供最多 500 条带编号的字幕文本，格式为：[编号] 内容。若有后续消息，它们属于同一份字幕，必须延续此前上下文。
 

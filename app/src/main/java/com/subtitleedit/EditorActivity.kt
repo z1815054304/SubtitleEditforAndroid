@@ -2010,6 +2010,7 @@ class EditorActivity : AppCompatActivity() {
         val model = settingsManager.getAiModel()
         val sourceLanguage = settingsManager.getAiSourceLanguage()
         val targetLanguage = settingsManager.getAiTargetLanguage()
+        val customPrompt = settingsManager.getAiTranslationPrompt()
         
         // 显示翻译确认对话框
         val sourceLangText = if (sourceLanguage == "自动检测") "自动检测" else sourceLanguage
@@ -2017,7 +2018,7 @@ class EditorActivity : AppCompatActivity() {
             .setTitle("AI 翻译")
             .setMessage("将使用 $providerName / $model 翻译选中的 ${selectedEntries.size} 条字幕\n源语言：$sourceLangText\n目标语言：$targetLanguage\n\n点击「开始翻译」继续")
             .setPositiveButton("开始翻译") { _, _ ->
-                startTranslation(selectedEntries, provider, apiKey, model, sourceLanguage, targetLanguage)
+                startTranslation(selectedEntries, provider, apiKey, model, sourceLanguage, targetLanguage, customPrompt)
             }
             .setNegativeButton("取消", null)
             .show()
@@ -2032,7 +2033,8 @@ class EditorActivity : AppCompatActivity() {
         apiKey: String,
         model: String,
         sourceLanguage: String,
-        targetLanguage: String
+        targetLanguage: String,
+        customPrompt: String
     ) {
         // 显示翻译进度对话框
         val progressDialog = AlertDialog.Builder(this)
@@ -2048,7 +2050,7 @@ class EditorActivity : AppCompatActivity() {
         translateCancelled = false
         isTranslating = true
         
-        val aiTranslator = AiTranslator(provider, apiKey, model, sourceLanguage, targetLanguage)
+        val aiTranslator = AiTranslator(provider, apiKey, model, sourceLanguage, targetLanguage, customPrompt)
         val textsToTranslate = selectedEntries.map { it.first.text }
         
         translateJob = CoroutineScope(Dispatchers.Main).launch {

@@ -23,6 +23,7 @@ class SettingsManager private constructor(context: Context) {
         private const val KEY_AI_MODEL = "ai_model"
         private const val KEY_AI_SOURCE_LANGUAGE = "ai_source_language"
         private const val KEY_AI_TARGET_LANGUAGE = "ai_target_language"
+        private const val KEY_AI_TRANSLATION_PROMPT = "ai_translation_prompt"
         private const val KEY_WAVEFORM_CACHE_LOCATION = "waveform_cache_location"
         private const val KEY_LOOP_SELECTED_SUBTITLE = "loop_selected_subtitle"
         private const val KEY_WHISPER_ENCODER_PATH = "whisper_encoder_path"
@@ -174,6 +175,13 @@ class SettingsManager private constructor(context: Context) {
      */
     fun setAiTargetLanguage(language: String) {
         prefs.edit().putString(KEY_AI_TARGET_LANGUAGE, language).apply()
+    }
+
+    fun getAiTranslationPrompt(): String =
+        prefs.getString(KEY_AI_TRANSLATION_PROMPT, "") ?: ""
+
+    fun setAiTranslationPrompt(prompt: String) {
+        prefs.edit().putString(KEY_AI_TRANSLATION_PROMPT, prompt).apply()
     }
     
     /**
