@@ -100,16 +100,18 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun refreshTotalCacheSizeDisplay() {
-        val total = calcWaveformCacheSize() + calcSpectrogramCacheSize()
+        val total = calcWaveformCacheSize() + calcSpectrogramCacheSize() + calcQuickTranscribeAudioCacheSize()
         binding.tvTotalCacheSize.text = if (total > 0) formatSize(total) else ""
     }
 
     private fun showClearCacheDialog() {
         val waveSize = calcWaveformCacheSize()
         val specSize = calcSpectrogramCacheSize()
+        val audioSize = calcQuickTranscribeAudioCacheSize()
         val options = arrayOf(
             "波形图缓存（${formatSize(waveSize)}）",
-            "频谱图缓存（${formatSize(specSize)}）"
+            "频谱图缓存（${formatSize(specSize)}）",
+            "快速转录音频缓存（${formatSize(audioSize)}）"
         )
         AlertDialog.Builder(this)
             .setTitle("清除缓存")
@@ -117,6 +119,7 @@ class SettingsActivity : AppCompatActivity() {
                 when (which) {
                     0 -> confirmClearWaveformCache(waveSize)
                     1 -> confirmClearSpectrogramCache(specSize)
+                    2 -> confirmClearQuickTranscribeAudioCache(audioSize)
                 }
             }
             .setNegativeButton("取消", null)
@@ -137,6 +140,18 @@ class SettingsActivity : AppCompatActivity() {
         return dir.walkTopDown()
             .filter { it.isFile && it.extension == "png" && it.name.contains(".spec_") }
             .sumOf { it.length() }
+    }
+
+    private fun calcQuickTranscribeAudioCacheSize(): Long {
+        return quickTranscribeAudioCacheFiles().sumOf { it.length() }
+    }
+
+    private fun quickTranscribeAudioCacheFiles(): List<File> {
+        return cacheDir.listFiles()
+            ?.filter { file ->
+                file.isFile && file.name.startsWith("quick_transcribe_") && file.name.endsWith("_16k.wav")
+            }
+            .orEmpty()
     }
 
     private fun formatSize(bytes: Long): String = when {
@@ -181,6 +196,23 @@ class SettingsActivity : AppCompatActivity() {
                     .filter { it.isFile && it.extension == "png" && it.name.contains(".spec_") }
                     .forEach { it.delete(); count++ }
                 com.subtitleedit.util.OverwritingToast.makeText(this, "已清除 $count 个频谱图缓存文件", Toast.LENGTH_SHORT).show()
+                refreshTotalCacheSizeDisplay()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmClearQuickTranscribeAudioCache(size: Long) {
+        if (size == 0L) {
+            com.subtitleedit.util.OverwritingToast.makeText(this, "暂无快速转录音频缓存可清除", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("清除快速转录音频缓存")
+            .setMessage("将删除 ${formatSize(size)} 的快速转录音频缓存，下次快速转录时会重新生成。\n确定继续？")
+            .setPositiveButton("清除") { _, _ ->
+                val count = quickTranscribeAudioCacheFiles().count { it.delete() }
+                com.subtitleedit.util.OverwritingToast.makeText(this, "已清除 $count 个快速转录音频缓存文件", Toast.LENGTH_SHORT).show()
                 refreshTotalCacheSizeDisplay()
             }
             .setNegativeButton("取消", null)

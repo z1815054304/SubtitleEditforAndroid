@@ -23,6 +23,7 @@ import com.subtitleedit.util.SubtitleParser
 import com.subtitleedit.util.VadTimestampGenerator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -236,6 +237,10 @@ class AutoTimestampActivity : AppCompatActivity() {
         isGenerating = true
 
         generationJob = lifecycleScope.launch {
+            val taskCacheDir = File(
+                cacheDir,
+                "auto_timestamp_${System.currentTimeMillis()}_${System.nanoTime()}"
+            ).apply { mkdirs() }
             try {
                 val result = withContext(Dispatchers.IO) {
                     // 1. 复制文件到缓存
@@ -243,7 +248,7 @@ class AutoTimestampActivity : AppCompatActivity() {
                         binding.tvStatus.text = "正在复制文件..."
                         appendOperationLog("预处理：复制输入文件到缓存目录")
                     }
-                    val cachedFile = copyUriToCache(audioUri, selectedFileName)
+                    val cachedFile = copyUriToCache(audioUri, selectedFileName, taskCacheDir)
                     if (cachedFile == null) {
                         throw Exception("复制文件失败")
                     }
@@ -256,7 +261,7 @@ class AutoTimestampActivity : AppCompatActivity() {
                         binding.tvStatus.text = "正在提取音频..."
                         appendOperationLog("预处理：使用 FFmpeg 转换音频")
                     }
-                    val pcmFile = convertToPcm(cachedFile)
+                    val pcmFile = convertToPcm(cachedFile, taskCacheDir)
                     if (pcmFile == null) {
                         throw Exception("音频转换失败")
                     }
@@ -317,6 +322,9 @@ class AutoTimestampActivity : AppCompatActivity() {
                     com.subtitleedit.util.OverwritingToast.makeText(this@AutoTimestampActivity, "处理失败：${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    taskCacheDir.deleteRecursively()
+                }
                 isGenerating = false
                 generationJob = null
             }
@@ -360,9 +368,9 @@ class AutoTimestampActivity : AppCompatActivity() {
     /**
      * 复制 URI 到缓存目录
      */
-    private fun copyUriToCache(uri: Uri, fileName: String): File? {
+    private fun copyUriToCache(uri: Uri, fileName: String, taskCacheDir: File): File? {
         return try {
-            val cacheFile = File(cacheDir, "temp_$fileName")
+            val cacheFile = File(taskCacheDir, "input_$fileName")
             contentResolver.openInputStream(uri)?.use { input ->
                 cacheFile.outputStream().use { output ->
                     input.copyTo(output)
@@ -378,9 +386,9 @@ class AutoTimestampActivity : AppCompatActivity() {
     /**
      * 转换为 16kHz PCM WAV
      */
-    private fun convertToPcm(inputFile: File): File? {
+    private fun convertToPcm(inputFile: File, taskCacheDir: File): File? {
         return try {
-            val outputFile = File(cacheDir, "${inputFile.nameWithoutExtension}_16k.wav")
+            val outputFile = File(taskCacheDir, "${inputFile.nameWithoutExtension}_16k.wav")
             if (outputFile.exists()) outputFile.delete()
 
             val cmd = "-y -i \"${inputFile.absolutePath}\" -ar 16000 -ac 1 -c:a pcm_s16le \"${outputFile.absolutePath}\""

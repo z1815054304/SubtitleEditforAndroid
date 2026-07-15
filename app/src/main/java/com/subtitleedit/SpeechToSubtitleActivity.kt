@@ -25,6 +25,7 @@ import com.subtitleedit.util.SubtitleOutputWriter
 import com.subtitleedit.util.WhisperRecognizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -351,6 +352,10 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
         realtimeResults.clear()
         lastProgressLog = ""
         conversionJob = lifecycleScope.launch {
+            val taskCacheDir = File(
+                cacheDir,
+                "speech_to_subtitle_${System.currentTimeMillis()}_${System.nanoTime()}"
+            ).apply { mkdirs() }
             try {
                 isConverting = true
                 showProgress("正在准备...", 0)
@@ -366,7 +371,7 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
                 // 1. 复制文件到缓存
                 appendRuntimeLog("预处理：复制输入文件到缓存目录")
                 val cachedFile = withContext(Dispatchers.IO) {
-                    copyUriToCache(selectedFileUri!!, selectedFileName)
+                    copyUriToCache(selectedFileUri!!, selectedFileName, taskCacheDir)
                 }
 
                 if (cachedFile == null) {
@@ -381,7 +386,7 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
                 showProgress("正在提取音频...", 5)
                 appendRuntimeLog("预处理：使用 FFmpeg 提取 16kHz 单声道 PCM WAV")
                 val pcmFile = withContext(Dispatchers.IO) {
-                    convertToPcm(cachedFile)
+                    convertToPcm(cachedFile, taskCacheDir)
                 }
 
                 if (pcmFile == null) {
@@ -455,6 +460,9 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
                     showError(e.message ?: "未知错误")
                 }
             } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    taskCacheDir.deleteRecursively()
+                }
                 isConverting = false
                 hideProgress()
                 updateStartButtonState()
@@ -478,9 +486,9 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
     /**
      * 复制 URI 到缓存目录
      */
-    private fun copyUriToCache(uri: Uri, fileName: String): File? {
+    private fun copyUriToCache(uri: Uri, fileName: String, taskCacheDir: File): File? {
         return try {
-            val cacheFile = File(cacheDir, "temp_$fileName")
+            val cacheFile = File(taskCacheDir, "input_$fileName")
             contentResolver.openInputStream(uri)?.use { input ->
                 cacheFile.outputStream().use { output ->
                     input.copyTo(output)
@@ -496,9 +504,9 @@ class SpeechToSubtitleActivity : AppCompatActivity() {
     /**
      * 转换为 16kHz PCM WAV
      */
-    private fun convertToPcm(inputFile: File): File? {
+    private fun convertToPcm(inputFile: File, taskCacheDir: File): File? {
         return try {
-            val outputFile = File(cacheDir, "${inputFile.nameWithoutExtension}_16k.wav")
+            val outputFile = File(taskCacheDir, "${inputFile.nameWithoutExtension}_16k.wav")
             if (outputFile.exists()) outputFile.delete()
 
             val cmd = "-y -i \"${inputFile.absolutePath}\" -ar 16000 -ac 1 -c:a pcm_s16le \"${outputFile.absolutePath}\""
