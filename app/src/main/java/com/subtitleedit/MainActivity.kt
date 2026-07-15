@@ -323,6 +323,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterSelectionMode(file: File) {
         if (file.name == "..") return
+        if (file.absolutePath in selectedPaths) {
+            toggleSelection(file)
+            return
+        }
         pendingFileOperation = null
         selectedPaths.add(file.absolutePath)
         updateSelectionUi()
@@ -334,6 +338,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectAllVisibleFiles() {
+        if (visibleFiles.isNotEmpty() && visibleFiles.all { it.absolutePath in selectedPaths }) {
+            exitSelectionMode()
+            return
+        }
         selectedPaths.addAll(visibleFiles.map { it.absolutePath })
         updateSelectionUi()
     }
@@ -652,12 +660,20 @@ class MainActivity : AppCompatActivity() {
     }
     
     override fun onBackPressed() {
-        if (selectedPaths.isNotEmpty()) {
+        if (pendingFileOperation != null && canGoUpLevel()) {
+            goUpLevel()
+        } else if (selectedPaths.isNotEmpty()) {
             exitSelectionMode()
         } else if (directoryHistory.isNotEmpty()) {
             goUpLevel()
         } else {
             super.onBackPressed()
         }
+    }
+
+    private fun canGoUpLevel(): Boolean {
+        if (directoryHistory.isNotEmpty()) return true
+        val parent = currentDirectory?.parentFile
+        return parent?.exists() == true && parent.canRead()
     }
 }
