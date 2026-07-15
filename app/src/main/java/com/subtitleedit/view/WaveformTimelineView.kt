@@ -346,7 +346,13 @@ class WaveformTimelineView @JvmOverloads constructor(
 
     private fun timeToX(timeMs: Long): Float {
         if (visibleDurationMs <= 0) return 0f
-        return ((timeMs - visibleStartMs).toFloat() / visibleDurationMs * width).coerceAtLeast(0f)
+        return timeToXUnclamped(timeMs).coerceAtLeast(0f)
+    }
+
+    /** 用于可被画布裁剪的元素，保留离开屏幕左侧后的真实坐标。 */
+    private fun timeToXUnclamped(timeMs: Long): Float {
+        if (visibleDurationMs <= 0) return 0f
+        return (timeMs - visibleStartMs).toFloat() / visibleDurationMs * width
     }
 
     private fun xToTime(x: Float): Long {
@@ -771,32 +777,35 @@ class WaveformTimelineView @JvmOverloads constructor(
             val sub = subtitles[index]
             if (sub.endTime < visibleStartMs || sub.startTime > visibleStartMs + visibleDurationMs) continue
 
+            val rawStartX = timeToXUnclamped(sub.startTime)
             val x1 = timeToX(sub.startTime)
             val x2 = timeToX(sub.endTime)
             val rw = max(x2 - x1, 4f)
             val hw = HANDLE_ZONE_W.coerceAtMost(rw / 3f)
+            // 左柄部分或全部离屏后，移动区从左柄的实际右边缘继续绘制，避免预留空隙。
+            val moveZoneLeft = maxOf(x1, rawStartX + hw)
+            val moveZoneRight = x1 + rw - hw
 
-            // 左缩放柄
-            canvas.drawRoundRect(RectF(x1, boxTop, x1 + hw, boxBot), 4f, 4f, subtitleResizeHandlePaint)
+            // 左缩放柄使用真实坐标，离屏时由画布裁剪，不能钉在左侧边缘。
+            canvas.drawRoundRect(RectF(rawStartX, boxTop, rawStartX + hw, boxBot), 4f, 4f, subtitleResizeHandlePaint)
             // 右缩放柄
             canvas.drawRoundRect(RectF(x1 + rw - hw, boxTop, x1 + rw, boxBot), 4f, 4f, subtitleResizeHandlePaint)
             // 中间移动区
-            if (rw > hw * 2f) {
-                canvas.drawRect(RectF(x1 + hw, boxTop, x1 + rw - hw, boxBot), subtitleMoveZonePaint)
+            if (moveZoneRight > moveZoneLeft) {
+                canvas.drawRect(RectF(moveZoneLeft, boxTop, moveZoneRight, boxBot), subtitleMoveZonePaint)
             }
             // 柄上箭头图标
             if (hw >= 14f) {
-                canvas.drawText("‹", x1 + hw / 2f, iconY, handleIconPaint)
+                canvas.drawText("‹", rawStartX + hw / 2f, iconY, handleIconPaint)
                 canvas.drawText("›", x1 + rw - hw / 2f, iconY, handleIconPaint)
             }
 
             // 字幕文本
             if (sub.text.isNotEmpty()) {
-                val textMarginL = hw + 4f
-                val textMarginR = hw + 4f
-                val availW = rw - textMarginL - textMarginR
+                val textStartX = moveZoneLeft + 4f
+                val availW = moveZoneRight - textStartX - 4f
                 if (availW > 12f) {
-                    canvas.drawText(clipText(sub.text, availW), x1 + textMarginL, boxTop + boxH / 2f + 8f, textPaint)
+                    canvas.drawText(clipText(sub.text, availW), textStartX, boxTop + boxH / 2f + 8f, textPaint)
                 }
             }
         }
@@ -1035,7 +1044,7 @@ class WaveformTimelineView @JvmOverloads constructor(
         // 优先返回选中的字幕块（置顶触摸层）
         val selectedHit = selectedIndices.mapNotNull { idx ->
             if (idx in subtitles.indices) subtitles[idx] else null
-        }.firstOrNull { x in timeToX(it.startTime)..timeToX(it.endTime) }
+        }.firstOrNull { x in timeToXUnclamped(it.startTime)..timeToXUnclamped(it.endTime) }
         if (selectedHit != null) return selectedHit
 
         // 再从后往前查找未选中的（后绘制的在上层）
@@ -1046,7 +1055,7 @@ class WaveformTimelineView @JvmOverloads constructor(
     }
 
     private fun detectDragMode(x: Float, sub: SubtitleEntry): DragMode {
-        val sx = timeToX(sub.startTime); val ex = timeToX(sub.endTime)
+        val sx = timeToXUnclamped(sub.startTime); val ex = timeToXUnclamped(sub.endTime)
         return when {
             abs(x - sx) < 30f -> DragMode.RESIZE_START
             abs(x - ex) < 30f -> DragMode.RESIZE_END
