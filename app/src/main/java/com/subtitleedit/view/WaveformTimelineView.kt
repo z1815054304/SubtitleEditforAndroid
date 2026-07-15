@@ -1296,6 +1296,12 @@ class WaveformTimelineView @JvmOverloads constructor(
     }
     fun getDisplayMode(): DisplayMode = displayMode
 
+    /** 返回当前频谱缓存文件应使用的固定尺寸；视图未完成布局时返回 null。 */
+    fun getSpectrogramCacheDimensions(): Pair<Int, Int>? {
+        if (height <= 0) return null
+        return SPECTROGRAM_CHUNK_WIDTH to (height * 0.67f).toInt().coerceAtLeast(64)
+    }
+
     /**
      * 注入某个 chunk 的频谱图 Bitmap（主线程调用）
      */

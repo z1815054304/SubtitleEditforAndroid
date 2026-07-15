@@ -2972,6 +2972,12 @@ class EditorActivity : AppCompatActivity() {
         }
         
         binding.waveformTimelineView.initialize(audioDuration, subtitleEntries.toList())
+        restoreSpectrogramCacheState(audioFile)
+        // 首次打开时 View 可能尚未完成布局，布局后再补一次精确尺寸检测。
+        binding.waveformTimelineView.post {
+            restoreSpectrogramCacheState(audioFile)
+            updateGenerateButton()
+        }
         
         // 波形缓存使用修复后的音频文件
         val settingsManager = SettingsManager.getInstance(this)
@@ -3008,11 +3014,7 @@ class EditorActivity : AppCompatActivity() {
         widthPx: Int, heightPx: Int
     ) {
         val audioFile = audioFilePath.takeIf { it.isNotEmpty() }?.let { File(it) } ?: currentFile ?: return
-        val settingsManager = SettingsManager.getInstance(this)
-        val cacheBaseDir = when (settingsManager.getWaveformCacheLocation()) {
-            SettingsManager.WAVEFORM_CACHE_APP -> File(cacheDir, "waveform")
-            else -> audioFile.parentFile ?: File(cacheDir, "waveform")
-        }
+        val cacheBaseDir = spectrogramCacheBaseDir(audioFile)
         cacheBaseDir.mkdirs()
 
         val specFile = File(cacheBaseDir,
@@ -3056,6 +3058,37 @@ class EditorActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** 恢复已完整生成的频谱缓存状态，避免重新打开音频后再次显示生成按钮。 */
+    private fun restoreSpectrogramCacheState(audioFile: File) {
+        spectrogramTotalChunks = calcTotalChunks()
+        spectrogramDoneChunks = 0
+        spectrogramIsGenerating = false
+        isSpectrogramGenerationStarted = hasCompleteSpectrogramCache(audioFile, spectrogramTotalChunks)
+        if (isSpectrogramGenerationStarted) {
+            spectrogramDoneChunks = spectrogramTotalChunks
+        }
+    }
+
+    private fun hasCompleteSpectrogramCache(audioFile: File, totalChunks: Int): Boolean {
+        if (totalChunks <= 0) return false
+        val dimensions = binding.waveformTimelineView.getSpectrogramCacheDimensions() ?: return false
+        val (width, height) = dimensions
+        val cacheBaseDir = spectrogramCacheBaseDir(audioFile)
+        val prefix = "${audioFile.nameWithoutExtension}.spec_"
+        return (0 until totalChunks).all { chunkIndex ->
+            File(cacheBaseDir, "${prefix}${chunkIndex}_${width}x${height}.png")
+                .let { it.isFile && it.length() > 0L }
+        }
+    }
+
+    private fun spectrogramCacheBaseDir(audioFile: File): File {
+        val settingsManager = SettingsManager.getInstance(this)
+        return when (settingsManager.getWaveformCacheLocation()) {
+            SettingsManager.WAVEFORM_CACHE_APP -> File(cacheDir, "waveform")
+            else -> audioFile.parentFile ?: File(cacheDir, "waveform")
+        }.apply { mkdirs() }
     }
 
     /**
