@@ -1,7 +1,9 @@
 package com.subtitleedit.util
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -23,16 +25,25 @@ class AiTranslator(
     private val customPrompt: String = ""
 ) {
     companion object {
-        private const val MAX_LINES_PER_REQUEST = 500
+        private const val MAX_LINES_PER_REQUEST = 300
+        private const val MAX_CHARS_PER_REQUEST = 12_000
+        private const val MAX_CONTEXT_CHARS = 2_000
+        private const val MAX_RETRY_COUNT = 3
     }
     private val client = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        // 0 表示无限制；用户可通过取消按钮主动中断当前请求。
+        .connectTimeout(0, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
+        .writeTimeout(0, TimeUnit.SECONDS)
         .build()
 
     private val providerConfig = AiProviderConfig.getProvider(provider)
     private val apiUrl = providerConfig.apiUrl
+    @Volatile private var activeCall: Call? = null
+
+    fun cancel() {
+        activeCall?.cancel()
+    }
 
     /**
      * 翻译字幕文本 - 批量翻译优化版本
@@ -56,17 +67,13 @@ class AiTranslator(
                 return@withContext Result.failure(CancellationException("翻译已取消"))
             }
 
-            val messages = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", buildSystemPrompt())
-                })
-            }
             val translatedTexts = mutableListOf<String>()
-            texts.chunked(MAX_LINES_PER_REQUEST).forEachIndexed { batchIndex, batch ->
+            var previousContext = ""
+            buildBatches(texts).forEachIndexed { batchIndex, batch ->
                 if (isCancelled()) throw CancellationException("翻译已取消")
-                val translatedBatch = translateBatch(batch, messages, batchIndex)
-                translatedTexts.addAll(translatedBatch)
+                val batchResult = translateBatch(batch, previousContext, batchIndex, isCancelled)
+                translatedTexts.addAll(batchResult.translations)
+                previousContext = batchResult.rawResponse.takeLast(MAX_CONTEXT_CHARS)
                 progressCallback?.invoke(translatedTexts.size, texts.size)
             }
 
@@ -80,25 +87,64 @@ class AiTranslator(
      * 批量翻译文本
      * 将所有字幕文本合并成一个大请求，提高效率和节省 Token
      */
-    private fun translateBatch(
+    private data class BatchResult(
+        val translations: List<String>,
+        val rawResponse: String
+    )
+
+    private class NonRetryableApiException(message: String) : IOException(message)
+
+    private fun buildBatches(texts: List<String>): List<List<String>> {
+        val batches = mutableListOf<MutableList<String>>()
+        var currentBatch = mutableListOf<String>()
+        var currentChars = 0
+        texts.forEach { text ->
+            if (text.length > MAX_CHARS_PER_REQUEST) {
+                throw IOException("单条字幕超过 ${MAX_CHARS_PER_REQUEST} 个字符，无法稳定翻译，请先拆分该字幕")
+            }
+            val indexedLength = text.length + 16
+            if (currentBatch.isNotEmpty() &&
+                (currentBatch.size >= MAX_LINES_PER_REQUEST || currentChars + indexedLength > MAX_CHARS_PER_REQUEST)
+            ) {
+                batches.add(currentBatch)
+                currentBatch = mutableListOf()
+                currentChars = 0
+            }
+            currentBatch.add(text)
+            currentChars += indexedLength
+        }
+        if (currentBatch.isNotEmpty()) batches.add(currentBatch)
+        return batches
+    }
+
+    private suspend fun translateBatch(
         texts: List<String>,
-        messages: JSONArray,
-        batchIndex: Int
-    ): List<String> {
-        if (texts.isEmpty()) return emptyList()
+        previousContext: String,
+        batchIndex: Int,
+        isCancelled: () -> Boolean
+    ): BatchResult {
+        if (texts.isEmpty()) return BatchResult(emptyList(), "")
 
         // 构建带索引的文本内容，方便后续解析
         val indexedContent = texts.mapIndexed { index, text ->
             "[${index + 1}] ${text}"
         }.joinToString("\n")
 
+        val messages = JSONArray().apply {
+            put(JSONObject().apply {
+                put("role", "system")
+                put("content", buildSystemPrompt())
+            })
+            if (previousContext.isNotBlank()) {
+                put(JSONObject().apply {
+                    put("role", "assistant")
+                    put("content", "上一批翻译结果摘要，请延续术语与语气：\n$previousContext")
+                })
+            }
+        }
         messages.put(JSONObject().apply {
             put("role", "user")
-            put(
-                "content",
-                if (batchIndex == 0) indexedContent
-                else "以下是同一份字幕的后续内容，请延续前文术语与语气，继续翻译：\n$indexedContent"
-            )
+            put("content", indexedContent)
         })
 
         val jsonBody = JSONObject().apply {
@@ -106,7 +152,7 @@ class AiTranslator(
             put("messages", messages)
             put("stream", false)
             put("temperature", 0.3)
-            put("max_tokens", 8192)
+            put("max_tokens", (texts.sumOf { it.length } * 2).coerceIn(1024, 8192))
         }
 
         val mediaType = "application/json".toMediaType()
@@ -119,33 +165,52 @@ class AiTranslator(
             .addHeader("Content-Type", "application/json")
             .build()
 
-        return client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "未知错误"
-                throw IOException("API 请求失败：${response.code} - $errorBody")
-            }
+        val responseContent = executeWithRetry(request, isCancelled)
+        val jsonResponse = JSONObject(responseContent)
+        val choices = jsonResponse.getJSONArray("choices")
+        if (choices.length() == 0) throw IOException("第 ${batchIndex + 1} 批没有返回翻译结果")
 
-            val responseBody = response.body?.string() ?: throw IOException("响应为空")
-            val jsonResponse = JSONObject(responseBody)
-            val choices = jsonResponse.getJSONArray("choices")
+        val content = choices.getJSONObject(0).getJSONObject("message").getString("content")
+        return BatchResult(parseTranslationResult(content, texts.size), content)
+    }
 
-            if (choices.length() > 0) {
-                val choice = choices.getJSONObject(0)
-                val message = choice.getJSONObject("message")
-                val content = message.getString("content")
-                messages.put(JSONObject().apply {
-                    put("role", "assistant")
-                    put("content", content)
-                })
-                val translations = parseTranslationResult(content, texts.size)
-                if (translations.any { it.isBlank() }) {
-                    throw IOException("第 ${batchIndex + 1} 批翻译结果不完整，请重试")
+    private suspend fun executeWithRetry(request: Request, isCancelled: () -> Boolean): String {
+        var lastError: IOException? = null
+        repeat(MAX_RETRY_COUNT) { attempt ->
+            if (isCancelled()) throw CancellationException("翻译已取消")
+            try {
+                val call = client.newCall(request)
+                activeCall = call
+                call.execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (response.isSuccessful) return body.ifBlank { throw IOException("响应为空") }
+                    val error = IOException(formatApiError(response.code, body))
+                    if (response.code !in listOf(408, 429) && response.code !in 500..599) {
+                        throw NonRetryableApiException(error.message ?: "API 请求失败")
+                    }
+                    lastError = error
+                    val retryAfterMs = response.header("Retry-After")?.toLongOrNull()?.times(1_000L)
+                    if (attempt < MAX_RETRY_COUNT - 1) delay(retryAfterMs ?: (1_000L shl attempt))
                 }
-                translations
-            } else {
-                throw IOException("没有翻译结果")
+            } catch (e: NonRetryableApiException) {
+                throw e
+            } catch (e: IOException) {
+                if (isCancelled()) throw CancellationException("翻译已取消")
+                lastError = e
+                if (attempt < MAX_RETRY_COUNT - 1) delay(1_000L shl attempt)
+            } finally {
+                activeCall = null
             }
         }
+        throw lastError ?: IOException("请求失败")
+    }
+
+    private fun formatApiError(code: Int, body: String): String {
+        val providerMessage = runCatching {
+            JSONObject(body).optJSONObject("error")?.optString("message")
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+        val detail = providerMessage ?: body.take(2_000).ifBlank { "未知错误" }
+        return "API 请求失败：$code - $detail"
     }
 
     /**
@@ -189,8 +254,11 @@ $additionalInstructions
      * 从 AI 返回的文本中提取翻译结果，保持原有顺序
      */
     private fun parseTranslationResult(content: String, expectedCount: Int): List<String> {
-        val result = mutableListOf<String>()
-        val lines = content.split("\n").filter { it.isNotBlank() }
+        val result = MutableList<String?>(expectedCount) { null }
+        val lines = content.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.startsWith("```") }
+            .toList()
 
         for (line in lines) {
             // 匹配 [数字] 格式
@@ -198,25 +266,17 @@ $additionalInstructions
             if (match != null) {
                 val index = match.groupValues[1].toIntOrNull()
                 val text = match.groupValues[2].trim()
-                if (index != null && index in 1..expectedCount) {
-                    // 确保列表足够大
-                    while (result.size < index) {
-                        result.add("")
-                    }
-                    result[index - 1] = text
+                if (index == null || index !in 1..expectedCount || text.isBlank()) {
+                    throw IOException("翻译结果编号或内容无效：$line")
                 }
-            } else if (result.size < expectedCount) {
-                // 如果没有匹配到编号格式，但还需要结果，直接添加（可能是 AI 格式略有偏差）
-                result.add(line.trim())
+                if (result[index - 1] != null) throw IOException("翻译结果包含重复编号：[$index]")
+                result[index - 1] = text
+            } else {
+                throw IOException("翻译结果格式无效，缺少编号：$line")
             }
         }
-
-        // 如果结果数量不足，用空字符串填充
-        while (result.size < expectedCount) {
-            result.add("")
-        }
-
-        return result
+        if (result.any { it == null }) throw IOException("翻译结果不完整，请重试")
+        return result.map { it!! }
     }
 
     /**

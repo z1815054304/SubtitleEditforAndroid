@@ -120,6 +120,7 @@ class EditorActivity : AppCompatActivity() {
     private var translateJob: Job? = null
     private var isTranslating = false
     private var translateCancelled = false
+    private var activeAiTranslator: AiTranslator? = null
 
     // 快速转录相关
     private var transcribeJob: Job? = null
@@ -2042,6 +2043,7 @@ class EditorActivity : AppCompatActivity() {
             .setMessage("正在翻译第 0/${selectedEntries.size} 条...")
             .setNegativeButton("取消") { _, _ ->
                 translateCancelled = true
+                activeAiTranslator?.cancel()
             }
             .setCancelable(false)
             .create()
@@ -2051,6 +2053,7 @@ class EditorActivity : AppCompatActivity() {
         isTranslating = true
         
         val aiTranslator = AiTranslator(provider, apiKey, model, sourceLanguage, targetLanguage, customPrompt)
+        activeAiTranslator = aiTranslator
         val textsToTranslate = selectedEntries.map { it.first.text }
         
         translateJob = CoroutineScope(Dispatchers.Main).launch {
@@ -2183,6 +2186,7 @@ class EditorActivity : AppCompatActivity() {
         }
         isTranslating = false
         translateJob = null
+        activeAiTranslator = null
     }
 
     private fun showTranslationError(message: String) {
@@ -2603,6 +2607,7 @@ class EditorActivity : AppCompatActivity() {
         tempFixedWavFile = null
         if (isTranslating) {
             translateCancelled = true
+            activeAiTranslator?.cancel()
             translateJob?.cancel()
         }
         transcribeCancelled = true
