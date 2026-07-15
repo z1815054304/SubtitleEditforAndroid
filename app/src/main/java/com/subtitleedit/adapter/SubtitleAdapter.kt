@@ -17,6 +17,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.subtitleedit.R
 import com.subtitleedit.model.SubtitleEntry
 import com.subtitleedit.util.TimeUtils
+import java.util.Collections
+import java.util.IdentityHashMap
 
 /**
  * 字幕列表适配器
@@ -36,9 +38,10 @@ class SubtitleAdapter(
     private val onSelectionChanged: (() -> Unit)? = null // 选中状态变化回调
 ) : ListAdapter<SubtitleEntry, SubtitleAdapter.SubtitleViewHolder>(SubtitleDiffCallback()) {
 
-    // 使用对象本身来跟踪选中状态，而不是 position
-    // 这样在数据变化时选中状态不会错位
-    private val selectedEntries = mutableSetOf<SubtitleEntry>()
+    // 使用对象引用跟踪选中状态，而非 data class 的可变字段哈希值。
+    // 翻译、转录或编辑文本后，条目仍保持原有选中状态。
+    private val selectedEntries: MutableSet<SubtitleEntry> =
+        Collections.newSetFromMap(IdentityHashMap())
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): SubtitleViewHolder {
         val view = LayoutInflater.from(parent.context)
@@ -89,7 +92,7 @@ class SubtitleAdapter(
     fun getSelectedPositions(): Set<Int> {
         // 返回当前选中的 position 列表（用于通知刷新）
         return selectedEntries.mapNotNull { entry ->
-            val index = currentList.indexOf(entry)
+            val index = currentList.indexOfFirst { it === entry }
             if (index >= 0) index else null
         }.toSet()
     }
@@ -97,7 +100,7 @@ class SubtitleAdapter(
     fun getSelectedEntries(): List<Pair<SubtitleEntry, Int>> {
         // 返回选中的条目及其当前位置
         return selectedEntries.mapNotNull { entry ->
-            val index = currentList.indexOf(entry)
+            val index = currentList.indexOfFirst { it === entry }
             if (index >= 0) Pair(entry, index) else null
         }.sortedBy { it.second }
     }
