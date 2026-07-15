@@ -11,28 +11,46 @@ import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.subtitleedit.adapter.FileListAdapter
 import com.subtitleedit.databinding.ActivityMainBinding
 import com.subtitleedit.util.FileUtils
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 主界面 - 文件浏览器
  */
 class MainActivity : AppCompatActivity() {
 
+    private companion object {
+        const val MENU_SELECT_ALL = 0x10001
+        const val MENU_SELECT_RANGE = 0x10002
+    }
+
     private lateinit var binding: ActivityMainBinding
     private lateinit var fileAdapter: FileListAdapter
     
     private var currentDirectory: File? = null
     private val directoryHistory = mutableListOf<File>()
+    private val visibleFiles = mutableListOf<File>()
+    private val selectedPaths = linkedSetOf<String>()
+    private var pendingFileOperation: FileOperation? = null
+
+    private enum class FileOperation { COPY, MOVE }
     
     // 权限请求
     private val permissionLauncher = registerForActivityResult(
@@ -79,31 +97,56 @@ class MainActivity : AppCompatActivity() {
     private fun setupToolbar() {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.title = getString(R.string.app_name)
-        
-        binding.toolbar.setOnMenuItemClickListener { menuItem ->
-            when (menuItem.itemId) {
-                R.id.menu_tools -> {
-                    startActivity(Intent(this, ToolsActivity::class.java))
-                    true
-                }
-                R.id.menu_settings -> {
-                    startActivity(Intent(this, SettingsActivity::class.java))
-                    true
-                }
-                else -> false
-            }
-        }
     }
     
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_main, menu)
+    override fun onCreateOptionsMenu(menu: Menu): Boolean = true
+
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        menu.clear()
+        if (selectedPaths.isNotEmpty()) {
+            if (pendingFileOperation == null) {
+                menu.add(Menu.NONE, MENU_SELECT_ALL, 0, "全选")
+                    .setIcon(R.drawable.ic_select_all)
+                    .setContentDescription("全选")
+                    .setTooltipText("全选")
+                    .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                menu.add(Menu.NONE, MENU_SELECT_RANGE, 1, "局部全选")
+                    .setIcon(R.drawable.ic_select_range)
+                    .setContentDescription("局部全选")
+                    .setTooltipText("局部全选")
+                    .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+            }
+        } else {
+            menuInflater.inflate(R.menu.menu_main, menu)
+        }
         return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
+        MENU_SELECT_ALL -> {
+            selectAllVisibleFiles()
+            true
+        }
+        MENU_SELECT_RANGE -> {
+            selectRangeBetweenSelectedFiles()
+            true
+        }
+        R.id.menu_tools -> {
+            startActivity(Intent(this, ToolsActivity::class.java))
+            true
+        }
+        R.id.menu_settings -> {
+            startActivity(Intent(this, SettingsActivity::class.java))
+            true
+        }
+        else -> super.onOptionsItemSelected(item)
     }
     
     private fun setupRecyclerView() {
-        fileAdapter = FileListAdapter { file ->
-            onFileClicked(file)
-        }
+        fileAdapter = FileListAdapter(
+            onItemClick = ::onFileClicked,
+            onItemLongClick = ::enterSelectionMode
+        )
         
         binding.rvFileList.apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
@@ -118,6 +161,17 @@ class MainActivity : AppCompatActivity() {
         
         binding.btnDrafts.setOnClickListener {
             openDrafts()
+        }
+
+        binding.btnCopySelected.setOnClickListener { startDestinationSelection(FileOperation.COPY) }
+        binding.btnMoveSelected.setOnClickListener { startDestinationSelection(FileOperation.MOVE) }
+        binding.btnRenameSelected.setOnClickListener { renameSelectedFile() }
+        binding.btnDeleteSelected.setOnClickListener { confirmDeleteSelectedFiles() }
+        binding.btnMoreSelected.setOnClickListener { showMoreActions() }
+        binding.btnConfirmDestination.setOnClickListener { completeCopyOrMove() }
+        binding.btnCancelDestination.setOnClickListener {
+            pendingFileOperation = null
+            updateSelectionUi()
         }
     }
     
@@ -218,8 +272,11 @@ class MainActivity : AppCompatActivity() {
             file.isFile && FileUtils.isAudioFile(file)
         }?.sortedBy { it.name.lowercase() } ?: emptyList()
         files.addAll(audioFiles)
+        visibleFiles.clear()
+        visibleFiles.addAll(files.filter { it.name != ".." })
         
         fileAdapter.submitList(files)
+        updateSelectionUi()
         
         // 更新空状态
         binding.emptyState.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
@@ -238,6 +295,16 @@ class MainActivity : AppCompatActivity() {
             goUpLevel()
             return
         }
+
+        if (selectedPaths.isNotEmpty()) {
+            if (file.isDirectory) {
+                directoryHistory.add(currentDirectory!!)
+                loadDirectory(file)
+            } else {
+                toggleSelection(file)
+            }
+            return
+        }
         
         if (file.isDirectory) {
             // 进入子目录
@@ -252,6 +319,251 @@ class MainActivity : AppCompatActivity() {
         } else {
             com.subtitleedit.util.OverwritingToast.makeText(this, "不支持的文件格式", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun enterSelectionMode(file: File) {
+        if (file.name == "..") return
+        pendingFileOperation = null
+        selectedPaths.add(file.absolutePath)
+        updateSelectionUi()
+    }
+
+    private fun toggleSelection(file: File) {
+        if (!selectedPaths.add(file.absolutePath)) selectedPaths.remove(file.absolutePath)
+        if (selectedPaths.isEmpty()) exitSelectionMode() else updateSelectionUi()
+    }
+
+    private fun selectAllVisibleFiles() {
+        selectedPaths.addAll(visibleFiles.map { it.absolutePath })
+        updateSelectionUi()
+    }
+
+    private fun selectRangeBetweenSelectedFiles() {
+        val selectedIndices = visibleFiles.mapIndexedNotNull { index, file ->
+            index.takeIf { file.absolutePath in selectedPaths }
+        }
+        if (selectedIndices.size < 2) {
+            showShortToast("请先在当前目录选择两个文件")
+            return
+        }
+
+        val start = selectedIndices.minOrNull() ?: return
+        val end = selectedIndices.maxOrNull() ?: return
+        selectedPaths.addAll(visibleFiles.subList(start, end + 1).map { it.absolutePath })
+        updateSelectionUi()
+    }
+
+    private fun selectedFiles(): List<File> = selectedPaths.map(::File).filter { it.exists() }
+
+    private fun updateSelectionUi() {
+        val isSelecting = selectedPaths.isNotEmpty()
+        binding.normalBottomActions.visibility = if (isSelecting) View.GONE else View.VISIBLE
+        binding.selectionBottomActions.visibility = if (isSelecting) View.VISIBLE else View.GONE
+
+        val operation = pendingFileOperation
+        val selectionTitle = when (operation) {
+            FileOperation.COPY -> "选择复制目标（已选 ${selectedPaths.size} 项）"
+            FileOperation.MOVE -> "选择移动目标（已选 ${selectedPaths.size} 项）"
+            null -> "已选择 ${selectedPaths.size} 项"
+        }
+        val choosingDestination = operation != null
+        binding.selectionActionItems.visibility = if (choosingDestination) View.GONE else View.VISIBLE
+        binding.destinationActionItems.visibility = if (choosingDestination) View.VISIBLE else View.GONE
+        listOf(
+            binding.btnCopySelected,
+            binding.btnMoveSelected,
+            binding.btnRenameSelected,
+            binding.btnDeleteSelected,
+            binding.btnMoreSelected
+        ).forEach { it.isEnabled = !choosingDestination }
+        binding.btnConfirmDestination.text = if (operation == FileOperation.MOVE) "移动到此处" else "复制到此处"
+        supportActionBar?.title = if (isSelecting) {
+            selectionTitle
+        } else {
+            getString(R.string.app_name)
+        }
+        binding.toolbar.navigationIcon = if (isSelecting) {
+            ContextCompat.getDrawable(this, R.drawable.ic_close)
+        } else {
+            null
+        }
+        binding.toolbar.navigationContentDescription = if (isSelecting) "退出选择模式" else null
+        binding.toolbar.setNavigationOnClickListener(if (isSelecting) {
+            View.OnClickListener { exitSelectionMode() }
+        } else {
+            null
+        })
+        invalidateOptionsMenu()
+        fileAdapter.updateSelection(isSelecting, selectedPaths)
+    }
+
+    private fun exitSelectionMode() {
+        selectedPaths.clear()
+        pendingFileOperation = null
+        updateSelectionUi()
+    }
+
+    private fun startDestinationSelection(operation: FileOperation) {
+        if (selectedFiles().isEmpty()) {
+            exitSelectionMode()
+            return
+        }
+        pendingFileOperation = operation
+        updateSelectionUi()
+    }
+
+    private fun completeCopyOrMove() {
+        val operation = pendingFileOperation ?: return
+        val destination = currentDirectory ?: return
+        val sources = selectedFiles()
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    sources.forEach { source -> copyOrMove(source, destination, operation) }
+                }
+            }
+            result.onSuccess {
+                showShortToast(if (operation == FileOperation.COPY) "已复制" else "已移动")
+                exitSelectionMode()
+                loadDirectory(destination)
+            }.onFailure { error ->
+                showShortToast("操作失败：${error.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    private fun copyOrMove(source: File, destination: File, operation: FileOperation) {
+        val sourcePath = source.canonicalFile
+        val destinationPath = destination.canonicalFile
+        if (source.isDirectory && destinationPath.path.startsWith(sourcePath.path + File.separator)) {
+            throw IllegalArgumentException("不能将文件夹复制或移动到其自身内部")
+        }
+        val target = File(destination, uniqueFileName(destination, source.name))
+        if (!source.copyRecursively(target, overwrite = false)) {
+            throw IllegalStateException("复制失败：${source.name}")
+        }
+        if (operation == FileOperation.MOVE && !source.deleteRecursively()) {
+            throw IllegalStateException("已复制，但无法删除原文件：${source.name}")
+        }
+    }
+
+    private fun uniqueFileName(directory: File, originalName: String): String {
+        if (!File(directory, originalName).exists()) return originalName
+        val separator = originalName.lastIndexOf('.')
+        val base = if (separator > 0) originalName.substring(0, separator) else originalName
+        val extension = if (separator > 0) originalName.substring(separator) else ""
+        var index = 1
+        var candidate: String
+        do {
+            candidate = "$base ($index)$extension"
+            index++
+        } while (File(directory, candidate).exists())
+        return candidate
+    }
+
+    private fun renameSelectedFile() {
+        val files = selectedFiles()
+        if (files.size != 1) {
+            showShortToast("请只选择一个文件或文件夹进行重命名")
+            return
+        }
+        showRenameDialog(files.first())
+    }
+
+    private fun showRenameDialog(file: File) {
+        val input = android.widget.EditText(this).apply {
+            setText(file.name)
+            setSelection(text.length)
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("重命名")
+            .setView(input)
+            .setPositiveButton("确定") { _, _ ->
+                val newName = input.text?.toString()?.trim().orEmpty()
+                when {
+                    newName.isEmpty() || newName == "." || newName == ".." || newName.contains('/') || newName.contains('\\') ->
+                        showShortToast("文件名无效")
+                    newName == file.name -> Unit
+                    else -> {
+                        val target = File(file.parentFile, newName)
+                        if (target.exists()) {
+                            showShortToast("目标名称已存在")
+                        } else if (file.renameTo(target)) {
+                            exitSelectionMode()
+                            currentDirectory?.let(::loadDirectory)
+                            showShortToast("已重命名")
+                        } else {
+                            showShortToast("重命名失败")
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmDeleteSelectedFiles() {
+        val files = selectedFiles()
+        if (files.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle("删除")
+            .setMessage("确定要删除选中的 ${files.size} 项吗？此操作无法撤销。")
+            .setPositiveButton("删除") { _, _ ->
+                lifecycleScope.launch {
+                    val deleted = withContext(Dispatchers.IO) { files.all { it.deleteRecursively() } }
+                    if (deleted) {
+                        exitSelectionMode()
+                        currentDirectory?.let(::loadDirectory)
+                        showShortToast("已删除")
+                    } else {
+                        showShortToast("删除失败")
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showMoreActions() {
+        PopupMenu(this, binding.btnMoreSelected).apply {
+            menu.add("查看属性")
+            setOnMenuItemClickListener {
+                showSelectedProperties()
+                true
+            }
+            show()
+        }
+    }
+
+    private fun showSelectedProperties() {
+        val files = selectedFiles()
+        if (files.isEmpty()) return
+        lifecycleScope.launch {
+            val details = withContext(Dispatchers.IO) {
+                if (files.size == 1) filePropertiesText(files.first())
+                else "已选择：${files.size} 项\n总大小：${FileUtils.formatFileSize(files.sumOf { if (it.isDirectory) directorySize(it) else it.length() })}"
+            }
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("属性")
+                .setMessage(details)
+                .setPositiveButton("确定", null)
+                .show()
+        }
+    }
+
+    private fun directorySize(directory: File): Long =
+        directory.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    private fun filePropertiesText(file: File): String {
+        val type = if (file.isDirectory) "文件夹" else file.extension.uppercase().ifBlank { "未知" } + " 文件"
+        val size = if (file.isDirectory) directorySize(file) else file.length()
+        val modified = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(file.lastModified()))
+        return "名称：${file.name}\n目录：${file.parent ?: ""}\n类型：$type\n大小：${FileUtils.formatFileSize(size)}\n修改时间：$modified"
+    }
+
+    private fun showShortToast(message: String) {
+        com.subtitleedit.util.OverwritingToast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
     
     /**
@@ -340,7 +652,9 @@ class MainActivity : AppCompatActivity() {
     }
     
     override fun onBackPressed() {
-        if (directoryHistory.isNotEmpty()) {
+        if (selectedPaths.isNotEmpty()) {
+            exitSelectionMode()
+        } else if (directoryHistory.isNotEmpty()) {
             goUpLevel()
         } else {
             super.onBackPressed()

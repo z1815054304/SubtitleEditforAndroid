@@ -8,6 +8,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.card.MaterialCardView
 import com.subtitleedit.R
 import com.subtitleedit.util.FileUtils
 import java.io.File
@@ -16,8 +17,18 @@ import java.io.File
  * 文件列表适配器
  */
 class FileListAdapter(
-    private val onItemClick: (File) -> Unit
+    private val onItemClick: (File) -> Unit,
+    private val onItemLongClick: (File) -> Unit
 ) : ListAdapter<File, FileListAdapter.FileViewHolder>(FileDiffCallback()) {
+
+    private var selectionMode = false
+    private var selectedPaths: Set<String> = emptySet()
+
+    fun updateSelection(selectionMode: Boolean, selectedPaths: Set<String>) {
+        this.selectionMode = selectionMode
+        this.selectedPaths = selectedPaths
+        notifyDataSetChanged()
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): FileViewHolder {
         val view = LayoutInflater.from(parent.context)
@@ -34,10 +45,9 @@ class FileListAdapter(
         private val tvFileName: TextView = itemView.findViewById(R.id.tvFileName)
         private val tvFileSize: TextView = itemView.findViewById(R.id.tvFileSize)
         private val tvFileExtension: TextView = itemView.findViewById(R.id.tvFileExtension)
+        private val card: MaterialCardView = itemView as MaterialCardView
 
         fun bind(file: File) {
-            val context = itemView.context
-            
             // 设置图标
             if (file.isDirectory) {
                 ivFileIcon.setImageResource(R.drawable.ic_folder)
@@ -53,10 +63,22 @@ class FileListAdapter(
 
             // 设置文件名
             tvFileName.text = file.name
+            val isSelected = file.absolutePath in selectedPaths
+            card.strokeWidth = if (isSelected) 2 else 0
+            card.strokeColor = if (isSelected) {
+                androidx.core.content.ContextCompat.getColor(itemView.context, R.color.primary)
+            } else {
+                android.graphics.Color.TRANSPARENT
+            }
+            itemView.alpha = if (selectionMode && !isSelected && file.name != "..") 0.72f else 1f
 
             // 点击事件
             itemView.setOnClickListener {
                 onItemClick(file)
+            }
+            itemView.setOnLongClickListener {
+                onItemLongClick(file)
+                true
             }
         }
     }
